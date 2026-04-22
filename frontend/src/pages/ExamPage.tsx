@@ -72,7 +72,7 @@ export default function ExamPage() {
           type="url"
           value={url}
           onChange={e => setUrl(e.target.value)}
-          placeholder="コース or ラーニングパス URL（/training/courses/... または /training/paths/...）"
+          placeholder="認定試験 / コース / ラーニングパス URL（/credentials/certifications/exams/... など）"
           required
         />
         <button type="submit" style={s.btn()} disabled={loading}>
@@ -80,7 +80,7 @@ export default function ExamPage() {
         </button>
       </form>
       <p style={{ fontSize: "0.8rem", color: "#888", margin: "-0.5rem 0 1rem" }}>
-        例：<code>https://learn.microsoft.com/ja-jp/training/courses/az-500t00</code>（コースURLは配下のラーニングパスを一括取得）
+        例：<code>https://learn.microsoft.com/ja-jp/credentials/certifications/exams/sc-100/</code> もしくは <code>/training/courses/az-500t00</code> / <code>/training/paths/...</code>（認定試験・コース URL は配下のラーニングパスを一括取得）
       </p>
 
       {msg && <p style={s.status(msg.ok)}>{msg.text}</p>}

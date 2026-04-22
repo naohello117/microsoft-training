@@ -31,6 +31,7 @@ async def scrape_from_url(source_url: str, include_content: bool = False) -> lis
     """入力URLを判別し、含まれる全ラーニングパスをスクレイピングする。
 
     対応URL:
+    - /credentials/certifications/exams/<exam-id>/ : 認定試験ページ配下のコース・パスを再帰的に抽出
     - /training/courses/<id>  : コース配下の全ラーニングパスを抽出してスクレイピング
     - /training/paths/<slug>/ : 単体のラーニングパス
 
@@ -46,7 +47,29 @@ async def scrape_from_url(source_url: str, include_content: bool = False) -> lis
         )
         page = await context.new_page()
         try:
-            if "/training/courses/" in source_url:
+            if "/credentials/certifications/exams/" in source_url:
+                course_urls, direct_path_urls = await _extract_links_from_certification(page, source_url)
+                logger.info(
+                    "認定試験ページからコース %d 件 / パス %d 件を直接検出",
+                    len(course_urls), len(direct_path_urls),
+                )
+                path_urls = list(direct_path_urls)
+                for c_url in course_urls:
+                    sub_paths = await _extract_path_urls_from_course(page, c_url)
+                    logger.info("  コース %s から %d 件のパスを抽出", c_url, len(sub_paths))
+                    path_urls.extend(sub_paths)
+                # 順序保持の重複排除
+                seen_paths: set[str] = set()
+                deduped: list[str] = []
+                for u in path_urls:
+                    if u not in seen_paths:
+                        seen_paths.add(u)
+                        deduped.append(u)
+                path_urls = deduped
+                logger.info("認定試験ページから合計 %d 件のラーニングパスを取得", len(path_urls))
+                if not path_urls:
+                    raise RuntimeError("認定試験ページからラーニングパスが見つかりませんでした")
+            elif "/training/courses/" in source_url:
                 path_urls = await _extract_path_urls_from_course(page, source_url)
                 logger.info("コースから %d 件のラーニングパスを検出", len(path_urls))
                 if not path_urls:
@@ -56,7 +79,8 @@ async def scrape_from_url(source_url: str, include_content: bool = False) -> lis
             else:
                 raise ValueError(
                     "サポートされていないURL形式です。"
-                    "/training/courses/... または /training/paths/... を指定してください"
+                    "/training/courses/... / /training/paths/... / "
+                    "/credentials/certifications/exams/... のいずれかを指定してください"
                 )
 
             results: list[dict[str, Any]] = []
@@ -88,6 +112,33 @@ async def scrape_single_unit(unit_url: str) -> str:
             return await _scrape_unit_content(page, unit_url)
         finally:
             await browser.close()
+
+
+async def _extract_links_from_certification(page: Page, cert_url: str) -> tuple[list[str], list[str]]:
+    """認定試験ページからコースURLとラーニングパスURLを抽出して返す。
+
+    返り値: (course_urls, path_urls)
+    """
+    await page.goto(cert_url, wait_until="domcontentloaded", timeout=30000)
+    await page.wait_for_timeout(2000)
+
+    extracted: dict[str, list[str]] = await page.evaluate(r"""() => {
+        const courseUrls = new Set();
+        const pathUrls = new Set();
+        document.querySelectorAll('a[href]').forEach(a => {
+            try {
+                const u = new URL(a.href);
+                let m;
+                if (m = u.pathname.match(/\/training\/courses\/([^/?#]+)/)) {
+                    courseUrls.add(u.origin + '/ja-jp/training/courses/' + m[1] + '/');
+                } else if (m = u.pathname.match(/\/training\/paths\/([^/?#]+)/)) {
+                    pathUrls.add(u.origin + '/ja-jp/training/paths/' + m[1] + '/');
+                }
+            } catch {}
+        });
+        return { courses: [...courseUrls], paths: [...pathUrls] };
+    }""")
+    return extracted["courses"], extracted["paths"]
 
 
 async def _extract_path_urls_from_course(page: Page, course_url: str) -> list[str]:
@@ -262,6 +313,22 @@ async def _scrape_unit_content(page: Page, url: str) -> str:
             });
         }""",
         _REMOVE_SELECTORS,
+    )
+
+    # innerText が <a href> の URL を捨てるため、事前に [text](url) 形式に書き換える
+    await page.evaluate(
+        """() => {
+            document.querySelectorAll('a[href]').forEach(a => {
+                const rawHref = a.getAttribute('href') || '';
+                if (rawHref.startsWith('#')) return;            // 同一ページ内アンカーは無視
+                const href = a.href;                            // ブラウザが絶対URLに解決
+                if (!href || !/^https?:/i.test(href)) return;   // javascript: 等を除外
+                const text = (a.innerText || '').trim();
+                if (!text) return;
+                if (text === href) return;                      // テキストとURLが同一なら不要
+                a.textContent = `[${text}](${href})`;
+            });
+        }"""
     )
 
     # コンテンツエリアからテキスト取得

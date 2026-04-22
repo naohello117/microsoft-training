@@ -1,10 +1,46 @@
 # 進捗サマリー
 
-## 最終更新：2026-04-19
+## 最終更新：2026-04-22
 
 ---
 
 ## ✅ 完了した作業
+
+### 2026-04-22（第3セッション）
+
+**AIエージェント化（Foundry Agents / Responses API）・進捗UI改善・リンク保持・認定試験URL対応。**
+
+- **Foundry Agents 化（Chat Completions → Responses API）**
+  - Foundry Portal で `summary-agent` / `quiz-agent` を作成し、アプリから `/protocols/openai/responses?api-version=2025-11-15-preview` を呼び出す方式に変更
+  - プロンプトは Foundry Portal 側の Instructions で管理 → **アプリ再デプロイ不要で更新可能**
+  - `quiz-agent` は Response format = **JSON Schema**（`strict: true`）で厳密な出力構造を保証
+  - 認証は Managed ID（ローカルは `az login`）＋ トークンスコープ `https://ai.azure.com/.default`、5分バッファでキャッシュ
+  - 既存の `openai_client.py` に依存する Chat Completions 経路は廃止
+
+- **`shared/foundry_agent.py` 新規作成**
+  - `aiohttp` で Responses API に直接 POST
+  - `_extract_text()` で `output_text` / `output[].content[].text` どちらのレスポンス形にも対応
+
+- **UI 進捗インジケータ**
+  - 要約・クイズ生成中に「① 取得中 → ② 生成中 → ③ 最終調整中 → ④ まだ処理中」と秒数付きで段階表示
+  - スピナーCSS + `setInterval(250ms)` で経過秒更新
+
+- **リンク改善（フロント）**
+  - Markdown リンクを `target="_blank"` で別タブ表示
+  - URL を en-us → ja-jp に自動書き換え（`toJaLocaleHref`）
+
+- **根本原因調査：新規要約にリンクが出ない問題**
+  - 原因：`_scrape_unit_content` が `el.innerText` を使っており `<a href>` の URL が捨てられていた
+  - これまで出ていた URL は AI のハルシネーション（学習データからの推測）の可能性大
+  - **対策：** スクレイパーで `<a href>` を `[text](href)` 形式に事前変換してから `innerText` 抽出
+  - summary-agent の Instructions に「リンクの扱い」ルールを追記（入力の URL をそのまま保持・創作禁止）
+    → ユーザー側で Foundry Portal に反映する運用
+
+- **認定試験URL対応（SC-100 対応）**
+  - `/credentials/certifications/exams/<id>/` パターンを新規サポート
+  - `_extract_links_from_certification()` を追加 — ページ内の `/training/courses/` と `/training/paths/` を分けて抽出
+  - 直接リンクのパス + コース経由のパスを統合・重複排除
+  - `ExamPage.tsx` の入力欄プレースホルダと例示も更新
 
 ### 2026-04-19（第2セッション）
 
@@ -70,13 +106,25 @@
 
 ## 🔧 技術的な決定事項・注意点
 
+- **Foundry Agents（Responses API）採用**：プロンプト変更のたびに再デプロイ不要。Foundry Portal で Instructions / Model / Temperature を編集 → 即反映。`quiz-agent` は JSON Schema（strict）で出力構造を保証する（json_object より厳密）。
+
+- **Responses API の応答パース**：`output_text` と `output[].content[].text`（`text` が文字列 or `{value}` オブジェクト）の両パターンを `_extract_text()` で吸収すること。
+
+- **`func start` は必ず `.venv` 有効化後に**：`source .venv/Scripts/activate` を忘れると system Python 3.14 が使われ `aiohttp` 等が import 失敗する。
+
+- **innerText は `<a href>` の URL を捨てる**：スクレイパーで AI に渡す前に DOM を `[text](href)` に書き換えるパターン必須。URL 情報を保持しないと AI が URL をハルシネーションする。
+
+- **summary-agent の Instructions はコードではなく Foundry Portal で管理**：`docs/foundry-agents.md` はソースオブトゥルースの仕様書として扱い、変更時はユーザーが Portal に反映する運用。
+
+- **認定試験URL（`/credentials/certifications/exams/...`）対応**：ページ内に training paths / courses 両方のリンクが混在。両方を抽出し、コース経由で解決したパスも合流させる。
+
 - **Foundry エンドポイント形式**：`services.ai.azure.com/api/projects/<proj>` 形式は `azure-ai-projects` SDK 必須。`openai` SDK の `AzureOpenAI` では接続不可（audience・APIバージョン不一致）。
 
 - **Cosmos DB サーバーレスアカウント**：`--throughput` オプション不可。コンテナ作成時は省略すること。
 
 - **Git Bash のパス変換**：`az cosmosdb sql role assignment create --scope "/<path>"` で `/` がWindowsパスに変換されるバグ。コマンド先頭に `MSYS_NO_PATHCONV=1` をつけること。
 
-- **Managed Identity 認証**：キーを使わず `DefaultAzureCredential` のみ。ローカルでは Azure CLI ログイン（`az login`）でフォールバック。本番は Functions の SystemAssigned ID を使用。
+- **Managed Identity 認証**：キーを使わず `DefaultAzureCredential` のみ。ローカルでは Azure CLI ログイン（`az login`）でフォールバック。本番は Functions の SystemAssigned ID を使用。マネージド ID には `Azure AI Administrator` ロール付与済み。
 
 - **`order` は Cosmos DB の予約語**：`SELECT c.order` は構文エラー → `SELECT c["order"]` と書くこと。
 
@@ -90,20 +138,27 @@
 
 ### 優先度：高（次回セッションで必ず着手）
 
-- [ ] **SC-300 / SC-100 のラーニングパスをスクレイピング**
-  - SC-300: `https://learn.microsoft.com/ja-jp/credentials/certifications/exams/sc-300/` からパスURLを確認
-  - SC-100: `https://learn.microsoft.com/ja-jp/credentials/certifications/exams/sc-100/` からパスURLを確認
-  - `ExamPage` から各試験のURLフォームでスクレイピング実行
+- [ ] **Foundry Portal の summary-agent Instructions を更新**
+  - `docs/foundry-agents.md` の「# リンクの扱い」セクションを Portal に貼り付け
+  - これをやらないと AI がリンクを創作する可能性が残る
+
+- [ ] **SC-100 / SC-300 のラーニングパスをスクレイピング**
+  - `https://learn.microsoft.com/ja-jp/credentials/certifications/exams/sc-100/`
+  - `https://learn.microsoft.com/ja-jp/credentials/certifications/exams/sc-300/`
+  - ExamPage の URL 追加フォームから投入（認定試験URL対応実装済み）
+
+- [ ] **新しいスクレイパー（リンク保持版）の動作確認**
+  - 未キャッシュのユニットで要約→リンクが Markdown で表示され・別タブで開き・ja-jp URL になることを目視確認
+
+### 優先度：中
 
 - [ ] **要約プロンプトのチューニング確認**
   - 実コンテンツで要約を生成し、品質を目視確認
   - 「★試験ポイント」の抽出精度を評価
 
-### 優先度：中
-
 - [ ] **フロントエンド機能拡充**
   - 進捗ダッシュボード（完了率・スコアのグラフ表示）
-  - ローディングスピナー・エラートースト実装
+  - エラートースト実装
   - `PathPage` で全モジュールの要約生成済みユニット数を表示
 
 - [ ] **Azure へのデプロイ**
@@ -120,6 +175,10 @@
   - `UnitPage.tsx` の `USER_ID` を AAD トークン（`x-ms-client-principal` ヘッダー）から取得
   - Static Web Apps の `/.auth/me` エンドポイントを利用
 
+- [ ] **未使用コードの整理**
+  - `shared/openai_client.py` は Foundry Agents 移行で未使用（削除可能か確認）
+  - 旧 `Dashboard.tsx` の TypeScript エラーが残っている場合は対処
+
 ---
 
 ## 🗂 プロジェクト構成・環境メモ
@@ -128,9 +187,10 @@
 microsoft-training/
 ├── backend/                        # Azure Functions (Python v2)
 │   ├── function_app.py             # 全エンドポイント（@app.route デコレータ）
-│   ├── scraping/ms_learn_scraper.py
+│   ├── scraping/ms_learn_scraper.py  # Playwright + リンク保持版
 │   ├── shared/cosmos_client.py
-│   ├── shared/openai_client.py
+│   ├── shared/foundry_agent.py     # ★NEW: Responses API 呼び出し
+│   ├── shared/openai_client.py     # （未使用、削除候補）
 │   ├── local.settings.json         # ローカル環境変数（git管理外推奨）
 │   └── requirements.txt
 ├── frontend/                       # React + Vite + TypeScript
@@ -138,9 +198,10 @@ microsoft-training/
 │       ├── pages/ExamListPage.tsx  # / : 試験カード一覧
 │       ├── pages/ExamPage.tsx      # /exam/:examId : ラーニングパス一覧
 │       ├── pages/PathPage.tsx      # /path/:pathId : ユニット一覧
-│       ├── pages/UnitPage.tsx      # /unit/:unitId : 要約 + クイズ
+│       ├── pages/UnitPage.tsx      # /unit/:unitId : 要約 + クイズ (進捗UI / リンクja-jp化)
 │       ├── api/client.ts           # 型付きAPIクライアント
 │       └── App.tsx                 # ルーティング定義
+├── docs/foundry-agents.md          # ★NEW: Foundry Agents 仕様書（Portal設定のソース）
 ├── infra/main.bicep
 ├── progress-summary.md
 └── .claude/skills/save-progress/
@@ -155,6 +216,19 @@ microsoft-training/
 | Azure AI Foundry | `foundry-training-murokawa` |
 | Foundry プロジェクトエンドポイント | `https://foundry-training-murokawa.services.ai.azure.com/api/projects/proj-default` |
 | OpenAI デプロイ名 | `gpt-4o` |
+| summary-agent URL | `.../applications/summary-agent/protocols/openai/responses?api-version=2025-11-15-preview` |
+| quiz-agent URL | `.../applications/quiz-agent/protocols/openai/responses?api-version=2025-11-15-preview` |
+
+**環境変数（`backend/local.settings.json`）**
+
+| キー | 用途 |
+|---|---|
+| `COSMOS_DB_ENDPOINT` | Cosmos DB のエンドポイント |
+| `COSMOS_DB_DATABASE` | Cosmos DB のデータベース名 |
+| `FOUNDRY_AGENT_URL_SUMMARY` | summary-agent の Responses API URL |
+| `FOUNDRY_AGENT_URL_QUIZ` | quiz-agent の Responses API URL |
+| `AZURE_OPENAI_ENDPOINT` | （旧 Chat Completions 経由・現在は未使用） |
+| `AZURE_OPENAI_DEPLOYMENT` | （旧 Chat Completions 経由・現在は未使用） |
 
 **スクレイピング済みデータ**
 
@@ -173,13 +247,15 @@ microsoft-training/
 # 1. ストレージエミュレーター（別ターミナル）
 npx azurite
 
-# 2. バックエンド
-cd backend && func start
+# 2. バックエンド（※ .venv 有効化を忘れない）
+cd backend
+source .venv/Scripts/activate
+func start --port 7071
 # → http://localhost:7071
 
 # 3. フロントエンド（別ターミナル）
 cd frontend && npm run dev
-# → http://localhost:5175（ポートは空き次第変わる）
+# → http://localhost:5173
 ```
 
 **APIエンドポイント一覧（ローカル）**
@@ -189,9 +265,17 @@ cd frontend && npm run dev
 | GET | `/api/exams` | 試験コレクション一覧 |
 | GET | `/api/learning-paths?exam_id=az-500` | 試験別ラーニングパス一覧 |
 | PATCH | `/api/learning-paths/{path_id}` | 試験タグ付け |
-| POST | `/api/scrape` | スクレイピング（exam_id/exam_name 含む） |
+| POST | `/api/scrape` | スクレイピング（認定試験/コース/パスURL対応） |
 | GET | `/api/units/{module_id}` | モジュール内ユニット一覧 |
-| GET | `/api/content/{unit_id}` | 要約取得（なければ生成） |
-| POST | `/api/quiz/{unit_id}` | クイズ生成（キャッシュあり） |
+| GET | `/api/content/{unit_id}` | 要約取得（なければ summary-agent で生成） |
+| POST | `/api/quiz/{unit_id}` | クイズ生成（quiz-agent / キャッシュあり） |
 | GET | `/api/progress/{user_id}` | 進捗取得 |
 | POST | `/api/progress/{user_id}` | 進捗保存 |
+
+**スクレイピング対応URL形式**
+
+| パターン | 例 | 動作 |
+|---|---|---|
+| `/credentials/certifications/exams/<id>/` | SC-100 試験ページ | 配下コース＋直接パスを再帰的に取得 |
+| `/training/courses/<id>` | `az-500t00` | コース配下の全パスを取得 |
+| `/training/paths/<slug>/` | `manage-identity-and-access` | 単体パスを取得 |
