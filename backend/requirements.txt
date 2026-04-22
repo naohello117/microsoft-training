@@ -1,0 +1,10 @@
+azure-functions==1.21.3
+azure-cosmos==4.7.0
+azure-identity==1.19.0
+azure-ai-projects==1.0.0b11
+azure-ai-inference==1.0.0b9
+openai>=1.55.3
+playwright>=1.49.0
+beautifulsoup4==4.12.3
+aiohttp>=3.11.0
+pydantic>=2.10.0

@@ -1,0 +1,288 @@
+import { useEffect, useState, useRef } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import ReactMarkdown from "react-markdown";
+import { api, Unit, Quiz } from "../api/client";
+
+const USER_ID = "demo-user"; // Static Web Apps の認証ヘッダーから取得するよう後で差し替え
+
+// Markdown 内リンクを日本語ドキュメントに差し替え、別タブで開く
+function toJaLocaleHref(href: string | undefined): string | undefined {
+  if (!href) return href;
+  return href
+    .replace(/^(https?:\/\/[^/]*learn\.microsoft\.com)\/en-us\//i, "$1/ja-jp/")
+    .replace(/^(https?:\/\/[^/]*microsoft\.com)\/en-us\//i, "$1/ja-jp/");
+}
+
+const MARKDOWN_COMPONENTS = {
+  a: ({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a
+      {...rest}
+      href={toJaLocaleHref(href)}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      {children}
+    </a>
+  ),
+};
+
+// 時間経過に応じて進捗メッセージを切り替える
+function pickStep(elapsedMs: number, steps: { untilSec: number; label: string }[]): string {
+  const elapsedSec = elapsedMs / 1000;
+  for (const s of steps) {
+    if (elapsedSec < s.untilSec) return s.label;
+  }
+  return steps[steps.length - 1].label;
+}
+
+const SUMMARY_STEPS = [
+  { untilSec: 6, label: "① ユニット本文を取得しています…" },
+  { untilSec: 25, label: "② AIエージェントが日本語要約を生成しています…" },
+  { untilSec: 60, label: "③ もう少しで完了します…" },
+  { untilSec: Infinity, label: "④ まだ処理中です。通常は60秒以内に完了します…" },
+];
+
+const QUIZ_STEPS = [
+  { untilSec: 5, label: "① 学習コンテンツを読み込んでいます…" },
+  { untilSec: 25, label: "② AIエージェントがクイズを作成しています…" },
+  { untilSec: 60, label: "③ 最終調整中…" },
+  { untilSec: Infinity, label: "④ まだ処理中です。通常は60秒以内に完了します…" },
+];
+
+// 進捗インジケータ
+function ProgressIndicator(props: { startedAt: number; steps: { untilSec: number; label: string }[]; title: string }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, []);
+  const elapsedMs = now - props.startedAt;
+  const elapsedSec = (elapsedMs / 1000).toFixed(1);
+  const label = pickStep(elapsedMs, props.steps);
+  return (
+    <div
+      style={{
+        background: "#eef6ff",
+        border: "1px solid #cfe3ff",
+        padding: "0.9rem 1.1rem",
+        borderRadius: 6,
+        margin: "0.5rem 0 1rem",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+        <span className="_spinner" aria-hidden />
+        <strong style={{ color: "#0352a6" }}>{props.title}</strong>
+        <span style={{ color: "#666", fontSize: "0.85em", marginLeft: "auto" }}>{elapsedSec}秒経過</span>
+      </div>
+      <p style={{ margin: "0.4rem 0 0", color: "#333", fontSize: "0.95em" }}>{label}</p>
+      <style>{`
+        ._spinner {
+          width: 14px; height: 14px; border-radius: 50%;
+          border: 2px solid #cfe3ff; border-top-color: #0078d4;
+          display: inline-block; animation: _spin 0.9s linear infinite;
+        }
+        @keyframes _spin { to { transform: rotate(360deg); } }
+      `}</style>
+    </div>
+  );
+}
+
+export default function UnitPage() {
+  const { unitId = "" } = useParams<{ unitId: string }>();
+  const navigate = useNavigate();
+  const [unit, setUnit] = useState<Unit | null>(null);
+  const [quizzes, setQuizzes] = useState<Quiz[]>([]);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [showResults, setShowResults] = useState(false);
+  const [unitLoading, setUnitLoading] = useState(true);
+  const [summaryStartedAt, setSummaryStartedAt] = useState<number | null>(null);
+  const [quizLoading, setQuizLoading] = useState(false);
+  const [quizStartedAt, setQuizStartedAt] = useState<number | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const loadOnce = useRef(false);
+
+  useEffect(() => {
+    if (loadOnce.current) return;
+    loadOnce.current = true;
+    (async () => {
+      try {
+        setUnitLoading(true);
+        const u = await api.getContent(unitId);
+        setUnit(u);
+        // 要約が未生成ならサーバー側で生成中のため、その目安としてスピナーを残す
+        // getContent は summary_ja を含めて返すため、通常ここで完了している
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : String(err));
+      } finally {
+        setUnitLoading(false);
+        setSummaryStartedAt(null);
+      }
+    })();
+    setSummaryStartedAt(Date.now());
+  }, [unitId]);
+
+  async function handleLoadQuiz() {
+    setErrorMsg(null);
+    setQuizLoading(true);
+    setQuizStartedAt(Date.now());
+    try {
+      const qs = await api.generateQuiz(unitId);
+      setQuizzes(qs);
+      setAnswers({});
+      setShowResults(false);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setQuizLoading(false);
+      setQuizStartedAt(null);
+    }
+  }
+
+  async function handleSubmit() {
+    setShowResults(true);
+    for (const q of quizzes) {
+      const answered = answers[q.id];
+      if (!answered) continue;
+      await api.saveProgress(USER_ID, {
+        unit_id: unitId,
+        quiz_result: {
+          quiz_id: q.id,
+          answered_key: answered,
+          is_correct: answered === q.correct_key,
+        },
+      });
+    }
+  }
+
+  if (unitLoading && !unit) {
+    return (
+      <div style={{ maxWidth: 800, margin: "0 auto", padding: "2rem" }}>
+        <button
+          style={{ background: "none", border: "none", color: "#0078d4", cursor: "pointer", fontSize: "0.9rem", padding: 0, marginBottom: "1rem" }}
+          onClick={() => navigate(-1)}
+        >
+          ← 戻る
+        </button>
+        {summaryStartedAt !== null && (
+          <ProgressIndicator
+            title="ユニットを読み込んでいます"
+            startedAt={summaryStartedAt}
+            steps={SUMMARY_STEPS}
+          />
+        )}
+        {errorMsg && <p style={{ color: "#c00" }}>エラー: {errorMsg}</p>}
+      </div>
+    );
+  }
+  if (!unit) return <p>ユニットが見つかりません</p>;
+
+  const score = showResults
+    ? quizzes.filter((q) => answers[q.id] === q.correct_key).length
+    : null;
+
+  return (
+    <div style={{ maxWidth: 800, margin: "0 auto", padding: "2rem" }}>
+      <button
+        style={{ background: "none", border: "none", color: "#0078d4", cursor: "pointer", fontSize: "0.9rem", padding: 0, marginBottom: "1rem" }}
+        onClick={() => navigate(-1)}
+      >
+        ← 戻る
+      </button>
+      <h2>{unit.title}</h2>
+
+      {errorMsg && (
+        <p style={{ background: "#f8d7da", color: "#842029", padding: "0.6rem 0.9rem", borderRadius: 4 }}>
+          エラー: {errorMsg}
+        </p>
+      )}
+
+      {unit.summary_ja ? (
+        <section>
+          <h3>要約</h3>
+          <div style={{ background: "#f8f9fa", padding: "1rem 1.25rem", borderRadius: 4, lineHeight: 1.7 }}>
+            <ReactMarkdown components={MARKDOWN_COMPONENTS}>{unit.summary_ja}</ReactMarkdown>
+          </div>
+        </section>
+      ) : (
+        summaryStartedAt !== null && (
+          <ProgressIndicator
+            title="要約を生成中"
+            startedAt={summaryStartedAt}
+            steps={SUMMARY_STEPS}
+          />
+        )
+      )}
+
+      <hr />
+
+      <section>
+        <h3>習熟度チェック</h3>
+        {quizLoading && quizStartedAt !== null ? (
+          <ProgressIndicator
+            title="クイズを生成中"
+            startedAt={quizStartedAt}
+            steps={QUIZ_STEPS}
+          />
+        ) : quizzes.length === 0 ? (
+          <button onClick={handleLoadQuiz} style={{ padding: "0.5rem 1rem" }}>
+            クイズを生成する
+          </button>
+        ) : (
+          <>
+            {quizzes.map((q, i) => (
+              <div key={q.id} style={{ marginBottom: "1.5rem" }}>
+                <p><strong>Q{i + 1}. {q.question}</strong></p>
+                {q.choices.map((c) => {
+                  const selected = answers[q.id] === c.key;
+                  const correct = showResults && c.key === q.correct_key;
+                  const wrong = showResults && selected && c.key !== q.correct_key;
+                  return (
+                    <label
+                      key={c.key}
+                      style={{
+                        display: "block",
+                        padding: "0.3rem 0.5rem",
+                        background: correct ? "#d4edda" : wrong ? "#f8d7da" : "transparent",
+                        borderRadius: 4,
+                        cursor: showResults ? "default" : "pointer",
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name={q.id}
+                        value={c.key}
+                        checked={selected}
+                        disabled={showResults}
+                        onChange={() => setAnswers((a) => ({ ...a, [q.id]: c.key }))}
+                      />
+                      {" "}{c.key}. {c.text}
+                    </label>
+                  );
+                })}
+                {showResults && (
+                  <p style={{ marginTop: "0.5rem", color: "#555", fontSize: "0.9em" }}>
+                    解説: {q.explanation}
+                  </p>
+                )}
+              </div>
+            ))}
+
+            {!showResults ? (
+              <button
+                onClick={handleSubmit}
+                disabled={Object.keys(answers).length < quizzes.length}
+                style={{ padding: "0.5rem 1rem" }}
+              >
+                回答を確認する
+              </button>
+            ) : (
+              <p style={{ fontWeight: "bold" }}>
+                結果: {score} / {quizzes.length} 問正解
+              </p>
+            )}
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
