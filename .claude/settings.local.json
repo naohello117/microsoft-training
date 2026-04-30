@@ -44,7 +44,12 @@
       "Read(//c/tmp/**)",
       "Bash(mkdir -p /c/tmp)",
       "Bash(awk '{print $5}')",
-      "Bash(xargs -I{} taskkill //F //PID {})"
+      "Bash(xargs -I{} taskkill //F //PID {})",
+      "Bash(az --version)",
+      "Bash(az bicep *)",
+      "Bash(npx -y @azure/static-web-apps-cli deploy ./dist --deployment-token a1f8bf88a915767678f9cd82f02b84fb7d7ce7d53ecc643476fb674931f6023a07-14c7f488-c4b6-42df-af33-4587e16c759e000281405c451000 --env production)",
+      "Bash(az account *)",
+      "Read(//tmp/**)"
     ]
   }
 }

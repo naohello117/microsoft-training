@@ -1,10 +1,77 @@
 # 進捗サマリー
 
-## 最終更新：2026-04-22
+## 最終更新：2026-04-26
 
 ---
 
 ## ✅ 完了した作業
+
+### 2026-04-26（第4セッション）
+
+**機能追加（汎用URL投入・再要約）→ Entra ID 管理者認証 → 本番デプロイ用 IaC + CI/CD 整備。**
+
+- **トップページに汎用URL投入機能を追加**
+  - `ExamListPage.tsx` に URL 入力フォームを設置 — 任意の試験URLを投入してコレクションが自動追加される
+  - 試験ID判別ロジックをバックエンド側 (`scrape_from_url`) に集約 — フロントは `isSupportedUrl()` で軽くチェックするだけ
+  - レスポンスに `exam_id` / `exam_name` を含める形に拡張し、UI 側で「○○ に N 件追加しました」と表示
+
+- **超汎用URL対応（認定資格ページ自体を解決）**
+  - 例: `/credentials/certifications/azure-network-engineer-associate/?practice-assessment-type=certification`（AZ-700）
+  - `_extract_exam_ids_from_certification_page()` を新規追加 — `/credentials/certifications/exams/<id>/` リンク + HTML 内の `exam.XX-NNN` パターンの両方を抽出
+  - 認定資格ページ → 試験ページ → コース → パス を再帰的に解決
+
+- **再要約機能（`force=true` / `↻ 再要約` ボタン）**
+  - `GET /api/content/{id}?force=true` でキャッシュを無視して summary-agent に再投入
+  - `UnitPage.tsx` の要約見出し横に「↻ 再要約」ボタンを追加（管理者のみ表示・後述）
+  - 進捗インジケータを再利用
+
+- **Entra ID 管理者認証（コスト保護）**
+  - 動機：本番公開時に悪意あるユーザーが過剰スクレイピング・AI生成を呼び出すコスト爆発を防ぐ
+  - 方針：**読み取りは全公開、コスト発生操作は管理者限定**。Entra ID で `admin` ロールを持つユーザーだけがスクレイピング/再要約できる
+  - **多層防御**：
+    1. `staticwebapp.config.json` のルートで `POST /api/scrape` と `PATCH /api/learning-paths/*` を `allowedRoles: ["admin"]` に
+    2. バックエンド `shared/auth.py` の `require_admin()` で `x-ms-client-principal` をデコード → 二重ガード
+  - **エンドポイントごとの方針**：
+    - `POST /api/scrape`: 管理者のみ
+    - `PATCH /api/learning-paths/*`: 管理者のみ
+    - `GET /api/content/{id}` キャッシュあり: 全員可
+    - `GET /api/content/{id}` 初回生成: **全員可**（管理者が全パスを事前生成する負担を回避するため）
+    - `GET /api/content/{id}?force=true`: 管理者のみ
+    - `POST /api/quiz/{id}` 初回生成: **全員可**
+    - `POST /api/quiz/{id}` キャッシュあり: 全員可
+  - **ローカル開発バイパス**：
+    - バックエンド: `LOCAL_ADMIN_BYPASS=true` （`local.settings.json`）
+    - フロント: `VITE_LOCAL_ADMIN_BYPASS=true` （`.env.local`）
+    - これで `/.auth/me` が無いローカルでも管理者UIで動作確認できる
+
+- **フロント認証UI**
+  - `frontend/src/auth.tsx` 新規作成 — `AuthProvider` + `useAuth()` フック + `AUTH_URLS`
+  - `App.tsx`：ヘッダー右側に「管理者サインイン」リンク or ユーザー名+「管理者」バッジ+「サインアウト」
+  - `ExamListPage.tsx` / `ExamPage.tsx`：URL入力フォームと注釈を `isAdmin` で条件付き表示
+  - `UnitPage.tsx`：「↻ 再要約」ボタンを管理者のみ表示。「クイズを生成する」ボタンは全員に表示（初回生成OK方針のため）
+
+- **本番デプロイ準備（IaC + CI/CD）**
+  - **`infra/main.bicep` 大幅拡張**：
+    - SWA を **Free → Standard** に変更（linkedBackend を使うため必須・$9/月）
+    - 既存 Cosmos `cosmos-training-murokawa` を `existing` 参照で再利用（破壊しない）
+    - Function App: 全 App Settings (`COSMOS_*`, `AZURE_OPENAI_*`, `FOUNDRY_AGENT_URL_*`) + `DISABLE_SCRAPE=true` + `LOCAL_ADMIN_BYPASS=false`
+    - SWA `linkedBackends` で Function App を `/api/*` として連携
+    - SWA appSettings に `AAD_CLIENT_ID` / `AAD_CLIENT_SECRET` を注入
+    - Application Insights を新規追加（Functions 監視用）
+    - System-Assigned MI に Cosmos DB Built-in Data Contributor を付与
+  - **GitHub Actions 3本作成**：
+    - `.github/workflows/infra.yml` — `infra/**` 変更時に Bicep デプロイ
+    - `.github/workflows/backend.yml` — `backend/**` 変更時に Functions デプロイ（Oryx remote build）
+    - `.github/workflows/frontend.yml` — `frontend/**` 変更時に SWA デプロイ。PR は自動でプレビュー環境
+    - 認証はすべて **OIDC (Workload Identity Federation)** で長期シークレット不要
+  - **本番でスクレイピング無効化**：
+    - `_scrape_disabled()` ヘルパーを `function_app.py` に追加
+    - `POST /api/scrape` と `GET /api/content/{id}` の遅延スクレイピング経路で 503 を返す
+    - 運用：管理者がローカルで `func start` し、本番 Cosmos に直接書き込み（Playwright のためにコンテナ化するコストを回避）
+
+- **ドキュメント**
+  - `docs/deployment.md` 新規作成 — アーキ図 / 初回手動セットアップ全手順（RG / Entra IDアプリ / UAMI+OIDC / Bicepデプロイ / SWA トークン / 管理者ロール / GitHub Secrets/Variables）/ 運用フロー / トラブルシュート / コスト見積
+  - `README.md` に「本番デプロイ・CI/CD」セクションを追加
 
 ### 2026-04-22（第3セッション）
 
@@ -106,31 +173,35 @@
 
 ## 🔧 技術的な決定事項・注意点
 
-- **Foundry Agents（Responses API）採用**：プロンプト変更のたびに再デプロイ不要。Foundry Portal で Instructions / Model / Temperature を編集 → 即反映。`quiz-agent` は JSON Schema（strict）で出力構造を保証する（json_object より厳密）。
+- **Playwright を本番 Functions に持ち込まない方針**：Consumption (Y1) Linux ではブラウザバイナリ + 共有ライブラリの導入が困難。Premium Plan やコンテナ化は月¥10,000+/¥1,000+ のコスト増。代わりに **管理者がローカルで `func start` → 本番 Cosmos に直接書き込む運用** を採用。本番では `DISABLE_SCRAPE=true` で 503 を返して経路自体を塞ぐ。
 
-- **Responses API の応答パース**：`output_text` と `output[].content[].text`（`text` が文字列 or `{value}` オブジェクト）の両パターンを `_extract_text()` で吸収すること。
+- **SWA は Standard tier 必須**：linkedBackend 機能（`/api/*` を別 Function App に転送）は Free tier では使えない。+$9/月コストはかかるが、これにより Function App 側で MI 認証 + 自由な依存関係（Playwright 等）が使える設計になる。Free tier の Managed Functions に詰め込む案は MI 不可・Cosmos キーが必要になりセキュリティで劣る。
 
-- **`func start` は必ず `.venv` 有効化後に**：`source .venv/Scripts/activate` を忘れると system Python 3.14 が使われ `aiohttp` 等が import 失敗する。
+- **既存 Cosmos / Foundry の再利用**：Bicep で `existing` キーワード参照に切り替え、新規作成しない。`rg-microsoft-training` 内の `cosmos-training-murokawa` / `foundry-training-murokawa` は手で作った既存リソース。新規作成されるのは Functions / SWA / Storage / App Insights の4つだけ。
+
+- **二層認証アーキテクチャ**：SWA `staticwebapp.config.json` のルート保護はネットワークレイヤー（外部からの直接POSTを弾く）、バックエンド `require_admin()` はアプリレイヤー（Functions URL を直接叩かれた場合の保険）。両方が必要。
+
+- **初回生成は全員 OK 方針**：「再要約・スクレイピングのみ管理者限定」とすることで、コンテンツ運用負担を分散。管理者は初回スクレイピングのみ行えば、ユニット閲覧で初回要約は一般ユーザーが各自トリガーできる。
+
+- **OIDC (Workload Identity Federation) 採用**：GitHub Actions ↔ Azure 間の認証は長期 Service Principal シークレットでなく OIDC。User-Assigned Managed Identity に GitHub の `repo:owner/repo:ref:refs/heads/main` と `:pull_request` を `subject` として federated credential を作成。
+
+- **Foundry Agents（Responses API）採用**：プロンプト変更のたびに再デプロイ不要。Foundry Portal で Instructions / Model / Temperature を編集 → 即反映。`quiz-agent` は JSON Schema（strict）で出力構造を保証する。
 
 - **innerText は `<a href>` の URL を捨てる**：スクレイパーで AI に渡す前に DOM を `[text](href)` に書き換えるパターン必須。URL 情報を保持しないと AI が URL をハルシネーションする。
 
 - **summary-agent の Instructions はコードではなく Foundry Portal で管理**：`docs/foundry-agents.md` はソースオブトゥルースの仕様書として扱い、変更時はユーザーが Portal に反映する運用。
 
-- **認定試験URL（`/credentials/certifications/exams/...`）対応**：ページ内に training paths / courses 両方のリンクが混在。両方を抽出し、コース経由で解決したパスも合流させる。
+- **Foundry エンドポイント形式**：`services.ai.azure.com/api/projects/<proj>` 形式は `azure-ai-projects` SDK 必須。`openai` SDK の `AzureOpenAI` では接続不可。
 
-- **Foundry エンドポイント形式**：`services.ai.azure.com/api/projects/<proj>` 形式は `azure-ai-projects` SDK 必須。`openai` SDK の `AzureOpenAI` では接続不可（audience・APIバージョン不一致）。
+- **`func start` は必ず `.venv` 有効化後に**：忘れると system Python 3.14 が使われて `aiohttp` 等が import 失敗する。
 
-- **Cosmos DB サーバーレスアカウント**：`--throughput` オプション不可。コンテナ作成時は省略すること。
+- **Cosmos DB サーバーレス**：`--throughput` オプション不可。`disableLocalAuth: true` のためキー認証は使わず MI 経由。
 
-- **Git Bash のパス変換**：`az cosmosdb sql role assignment create --scope "/<path>"` で `/` がWindowsパスに変換されるバグ。コマンド先頭に `MSYS_NO_PATHCONV=1` をつけること。
+- **Git Bash のパス変換**：`az cosmosdb ... --scope "/<path>"` で `/` がWindowsパスに変換されるバグ。`MSYS_NO_PATHCONV=1` で回避。
 
-- **Managed Identity 認証**：キーを使わず `DefaultAzureCredential` のみ。ローカルでは Azure CLI ログイン（`az login`）でフォールバック。本番は Functions の SystemAssigned ID を使用。マネージド ID には `Azure AI Administrator` ロール付与済み。
+- **`order` は Cosmos DB の予約語**：`SELECT c["order"]` と書くこと。
 
-- **`order` は Cosmos DB の予約語**：`SELECT c.order` は構文エラー → `SELECT c["order"]` と書くこと。
-
-- **試験コレクションの概念**：`learning_paths` ドキュメントに `exam_id` / `exam_name` フィールドを追加。`GET /api/exams` で集計取得。既存パスは `PATCH /api/learning-paths/{id}` で後付け可能。
-
-- **フロントエンドの `USER_ID`**：`UnitPage.tsx` 内で `"demo-user"` にハードコード。本番化時は Static Web Apps の AAD 認証ヘッダー（`x-ms-client-principal`）から取得するよう変更が必要。
+- **フロントエンドの `USER_ID`**：`UnitPage.tsx` 内で `"demo-user"` にハードコード。本番化時は `useAuth().principal.userId` から取得するよう変更が必要（Entra ID 認証は実装済みなので簡単に直せる）。
 
 ---
 
@@ -138,46 +209,49 @@
 
 ### 優先度：高（次回セッションで必ず着手）
 
-- [ ] **Foundry Portal の summary-agent Instructions を更新**
+- [ ] **本番デプロイ手順の実行**（`docs/deployment.md` の Step 1〜7）
+  - Step 2: Entra ID アプリ登録 → AAD_CLIENT_ID / AAD_CLIENT_SECRET / TENANT_ID を取得
+  - Step 3: User-Assigned Managed Identity 作成 + GitHub OIDC federation
+  - Step 4: 初回 Bicep デプロイ（`az deployment group create`）→ 新規 4 リソース作成
+  - Step 5-6: SWA デプロイトークン取得 + 管理者ロール付与
+  - Step 7: GitHub Secrets / Variables 登録 → `git push` で CI/CD 起動
+
+- [ ] **`staticwebapp.config.json` の `<tenant-id>` を実テナントIDに置換**
+  - 現在プレースホルダのまま。Step 2 で取得したテナントIDで置換してコミット
+
+- [ ] **Foundry Portal の summary-agent Instructions を更新**（前セッションからの持ち越し）
   - `docs/foundry-agents.md` の「# リンクの扱い」セクションを Portal に貼り付け
   - これをやらないと AI がリンクを創作する可能性が残る
 
-- [ ] **SC-100 / SC-300 のラーニングパスをスクレイピング**
-  - `https://learn.microsoft.com/ja-jp/credentials/certifications/exams/sc-100/`
-  - `https://learn.microsoft.com/ja-jp/credentials/certifications/exams/sc-300/`
-  - ExamPage の URL 追加フォームから投入（認定試験URL対応実装済み）
-
-- [ ] **新しいスクレイパー（リンク保持版）の動作確認**
-  - 未キャッシュのユニットで要約→リンクが Markdown で表示され・別タブで開き・ja-jp URL になることを目視確認
-
 ### 優先度：中
 
+- [ ] **`UnitPage.tsx` の `USER_ID` ハードコード解消**
+  - `useAuth().principal?.userId` から取得するよう変更
+  - 一般ユーザーも認証されている場合（Entra IDサインイン）は実IDを使う
+
+- [ ] **新しいスクレイパー（リンク保持版）の本番動作確認**
+  - 未キャッシュのユニットで要約→リンクが Markdown で表示・別タブで開き・ja-jp URL になることを目視確認
+
+- [ ] **SC-100 / SC-300 のラーニングパスをスクレイピング**
+  - 今は AZ-500 のみ。本番 Cosmos に向けて管理者ローカル運用フローで投入
+
 - [ ] **要約プロンプトのチューニング確認**
-  - 実コンテンツで要約を生成し、品質を目視確認
-  - 「★試験ポイント」の抽出精度を評価
-
-- [ ] **フロントエンド機能拡充**
-  - 進捗ダッシュボード（完了率・スコアのグラフ表示）
-  - エラートースト実装
-  - `PathPage` で全モジュールの要約生成済みユニット数を表示
-
-- [ ] **Azure へのデプロイ**
-  - Functions: `func azure functionapp publish <app-name>`
-  - Static Web Apps: GitHub Actions ワークフロー設定
+  - 実コンテンツで要約を生成し品質を目視確認
 
 ### 優先度：低
 
-- [ ] **Bicep テンプレートの完成**
-  - Foundry / Azure OpenAI リソース定義を追加
-  - `az deployment group create` でワンコマンドプロビジョニングを確認
+- [ ] **未使用コード整理**
+  - `frontend/src/pages/Dashboard.tsx`（旧ダッシュボード、ルート未登録だがビルド時に型エラー）
+  - `backend/shared/openai_client.py`（Foundry Agents 移行後に未使用）
+  - `backend/scraping/__pycache__` / `backend/__pycache__` を `.gitignore` に追加（既に追加済みなら不要）
 
-- [ ] **認証統合**
-  - `UnitPage.tsx` の `USER_ID` を AAD トークン（`x-ms-client-principal` ヘッダー）から取得
-  - Static Web Apps の `/.auth/me` エンドポイントを利用
+- [ ] **進捗ダッシュボード**
+  - 完了率・スコアのグラフ表示
+  - エラートースト実装
 
-- [ ] **未使用コードの整理**
-  - `shared/openai_client.py` は Foundry Agents 移行で未使用（削除可能か確認）
-  - 旧 `Dashboard.tsx` の TypeScript エラーが残っている場合は対処
+- [ ] **Bicep で Foundry / Cosmos を `existing` 参照する代わりに、IaC で完全管理する選択肢の検討**
+  - 現状は手作りリソースを使い回しているため、別環境（dev/staging）を立てたい場合に再現性が落ちる
+  - 必要になった時点で対応
 
 ---
 
@@ -186,38 +260,54 @@
 ```
 microsoft-training/
 ├── backend/                        # Azure Functions (Python v2)
-│   ├── function_app.py             # 全エンドポイント（@app.route デコレータ）
+│   ├── function_app.py             # 全エンドポイント + DISABLE_SCRAPE / require_admin ガード
 │   ├── scraping/ms_learn_scraper.py  # Playwright + リンク保持版
 │   ├── shared/cosmos_client.py
-│   ├── shared/foundry_agent.py     # ★NEW: Responses API 呼び出し
+│   ├── shared/foundry_agent.py     # Responses API 呼び出し
+│   ├── shared/auth.py              # ★NEW (4/26): x-ms-client-principal デコード + admin判定
 │   ├── shared/openai_client.py     # （未使用、削除候補）
 │   ├── local.settings.json         # ローカル環境変数（git管理外推奨）
 │   └── requirements.txt
 ├── frontend/                       # React + Vite + TypeScript
+│   ├── .env.local                  # ★NEW (4/26): VITE_LOCAL_ADMIN_BYPASS=true (ローカル管理者扱い)
+│   ├── staticwebapp.config.json    # SWA 認証 + ロールベースルート保護
 │   └── src/
-│       ├── pages/ExamListPage.tsx  # / : 試験カード一覧
-│       ├── pages/ExamPage.tsx      # /exam/:examId : ラーニングパス一覧
+│       ├── auth.tsx                # ★NEW (4/26): AuthProvider + useAuth() + AUTH_URLS
+│       ├── pages/ExamListPage.tsx  # / : 試験カード一覧 + 汎用URL投入フォーム (admin)
+│       ├── pages/ExamPage.tsx      # /exam/:examId : ラーニングパス一覧 + URL投入 (admin)
 │       ├── pages/PathPage.tsx      # /path/:pathId : ユニット一覧
-│       ├── pages/UnitPage.tsx      # /unit/:unitId : 要約 + クイズ (進捗UI / リンクja-jp化)
-│       ├── api/client.ts           # 型付きAPIクライアント
-│       └── App.tsx                 # ルーティング定義
-├── docs/foundry-agents.md          # ★NEW: Foundry Agents 仕様書（Portal設定のソース）
-├── infra/main.bicep
+│       ├── pages/UnitPage.tsx      # /unit/:unitId : 要約 + クイズ + 再要約ボタン (admin)
+│       ├── api/client.ts           # 型付きAPIクライアント (force=true / exam_id 対応)
+│       └── App.tsx                 # ルーティング + AuthProvider + ヘッダー認証コントロール
+├── infra/main.bicep                # 既存Cosmos参照 / SWA Standard / Functions / linkedBackend
+├── docs/
+│   ├── deployment.md               # ★NEW (4/26): 本番デプロイ全手順
+│   └── foundry-agents.md           # Foundry Agents 仕様書（Portal設定のソース）
+├── .github/workflows/              # ★NEW (4/26)
+│   ├── infra.yml                   # Bicep デプロイ (OIDC)
+│   ├── backend.yml                 # Functions デプロイ (OIDC + Oryx)
+│   └── frontend.yml                # SWA デプロイ (PR プレビュー対応)
 ├── progress-summary.md
-└── .claude/skills/save-progress/
+└── README.md                       # 本番デプロイセクション追加済
 ```
 
 **接続先リソース（rg-microsoft-training）**
 
-| リソース | 名前 |
-|---|---|
-| Cosmos DB アカウント | `cosmos-training-murokawa` |
-| Cosmos DB データベース | `cosmos-training-murokawa` |
-| Azure AI Foundry | `foundry-training-murokawa` |
-| Foundry プロジェクトエンドポイント | `https://foundry-training-murokawa.services.ai.azure.com/api/projects/proj-default` |
-| OpenAI デプロイ名 | `gpt-4o` |
-| summary-agent URL | `.../applications/summary-agent/protocols/openai/responses?api-version=2025-11-15-preview` |
-| quiz-agent URL | `.../applications/quiz-agent/protocols/openai/responses?api-version=2025-11-15-preview` |
+| リソース | 名前 | 状態 |
+|---|---|---|
+| リソースグループ | `rg-microsoft-training` | 既存 (japaneast) |
+| Cosmos DB アカウント | `cosmos-training-murokawa` | 既存（Bicep `existing` 参照） |
+| Cosmos DB データベース | `cosmos-training-murokawa` | 既存 |
+| Azure AI Foundry | `foundry-training-murokawa` | 既存 |
+| Foundry プロジェクトエンドポイント | `https://foundry-training-murokawa.services.ai.azure.com/api/projects/proj-default` | 既存 |
+| OpenAI デプロイ名 | `gpt-4o` | 既存 |
+| summary-agent URL | `.../applications/summary-agent/protocols/openai/responses?api-version=2025-11-15-preview` | 既存 |
+| quiz-agent URL | `.../applications/quiz-agent/protocols/openai/responses?api-version=2025-11-15-preview` | 既存 |
+| **Function App (新規)** | `mslearn-func` | Bicep で作成予定 |
+| **App Service Plan (新規)** | `mslearn-plan` (Y1 / Linux) | Bicep で作成予定 |
+| **Static Web Apps (新規)** | `mslearn-swa` (Standard) | Bicep で作成予定 |
+| **Storage Account (新規)** | `mslearnst` | Bicep で作成予定 |
+| **Application Insights (新規)** | `mslearn-ai` | Bicep で作成予定 |
 
 **環境変数（`backend/local.settings.json`）**
 
@@ -229,6 +319,13 @@ microsoft-training/
 | `FOUNDRY_AGENT_URL_QUIZ` | quiz-agent の Responses API URL |
 | `AZURE_OPENAI_ENDPOINT` | （旧 Chat Completions 経由・現在は未使用） |
 | `AZURE_OPENAI_DEPLOYMENT` | （旧 Chat Completions 経由・現在は未使用） |
+| `LOCAL_ADMIN_BYPASS` | `true` でローカル開発時に管理者扱いになる（本番では絶対 false） |
+
+**環境変数（`frontend/.env.local`）**
+
+| キー | 用途 |
+|---|---|
+| `VITE_LOCAL_ADMIN_BYPASS` | `true` で `/.auth/me` が無いローカルでも管理者UIを表示 |
 
 **スクレイピング済みデータ**
 
@@ -258,24 +355,58 @@ cd frontend && npm run dev
 # → http://localhost:5173
 ```
 
-**APIエンドポイント一覧（ローカル）**
+**APIエンドポイント一覧（admin 必要かどうか）**
 
-| メソッド | パス | 概要 |
-|---|---|---|
-| GET | `/api/exams` | 試験コレクション一覧 |
-| GET | `/api/learning-paths?exam_id=az-500` | 試験別ラーニングパス一覧 |
-| PATCH | `/api/learning-paths/{path_id}` | 試験タグ付け |
-| POST | `/api/scrape` | スクレイピング（認定試験/コース/パスURL対応） |
-| GET | `/api/units/{module_id}` | モジュール内ユニット一覧 |
-| GET | `/api/content/{unit_id}` | 要約取得（なければ summary-agent で生成） |
-| POST | `/api/quiz/{unit_id}` | クイズ生成（quiz-agent / キャッシュあり） |
-| GET | `/api/progress/{user_id}` | 進捗取得 |
-| POST | `/api/progress/{user_id}` | 進捗保存 |
+| メソッド | パス | 一般 | 管理者 |
+|---|---|---|---|
+| GET | `/api/exams` | ✅ | ✅ |
+| GET | `/api/learning-paths?exam_id=az-500` | ✅ | ✅ |
+| PATCH | `/api/learning-paths/{path_id}` | ❌ 403 | ✅ |
+| POST | `/api/scrape` | ❌ 403 (本番は 503) | ✅ (本番は 503) |
+| GET | `/api/units/{module_id}` | ✅ | ✅ |
+| GET | `/api/content/{unit_id}` | ✅ (初回生成OK) | ✅ |
+| GET | `/api/content/{unit_id}?force=true` | ❌ 403 | ✅ |
+| POST | `/api/quiz/{unit_id}` | ✅ (初回生成OK) | ✅ |
+| GET/POST | `/api/progress/{user_id}` | ✅ | ✅ |
 
 **スクレイピング対応URL形式**
 
 | パターン | 例 | 動作 |
 |---|---|---|
-| `/credentials/certifications/exams/<id>/` | SC-100 試験ページ | 配下コース＋直接パスを再帰的に取得 |
+| `/credentials/certifications/<cert-slug>/` | `azure-network-engineer-associate/` | 認定資格ページ → 試験ID解決 → 配下を再帰取得 |
+| `/credentials/certifications/exams/<id>/` | SC-100 試験ページ | 配下コース＋直接パスを再帰取得 |
 | `/training/courses/<id>` | `az-500t00` | コース配下の全パスを取得 |
 | `/training/paths/<slug>/` | `manage-identity-and-access` | 単体パスを取得 |
+
+**CI/CD ワークフロー（本番デプロイ後に有効化）**
+
+| ファイル | トリガー | 内容 |
+|---|---|---|
+| `.github/workflows/infra.yml` | `infra/**` 変更 / 手動 | Bicep デプロイ |
+| `.github/workflows/backend.yml` | `backend/**` 変更 / 手動 | Functions zip + Oryx remote build |
+| `.github/workflows/frontend.yml` | `frontend/**` 変更 / PR | SWA 静的サイトデプロイ。PR は自動でプレビュー環境作成 |
+
+**必要な GitHub Secrets**（次回セッションで設定）
+
+| Name | Value 取得元 |
+|---|---|
+| `AZURE_CLIENT_ID` | UAMI Client ID (Step 3) |
+| `AZURE_TENANT_ID` | `az account show --query tenantId` |
+| `AZURE_SUBSCRIPTION_ID` | `az account show --query id` |
+| `AAD_CLIENT_SECRET` | Entra アプリのシークレット (Step 2) |
+| `AZURE_STATIC_WEB_APPS_API_TOKEN` | SWA デプロイトークン (Step 5) |
+
+**必要な GitHub Variables**（次回セッションで設定）
+
+| Name | Value |
+|---|---|
+| `AZURE_RG` | `rg-microsoft-training` |
+| `RESOURCE_PREFIX` | `mslearn` |
+| `FUNCTION_APP_NAME` | `mslearn-func` |
+| `EXISTING_COSMOS_ACCOUNT` | `cosmos-training-murokawa` |
+| `EXISTING_COSMOS_DATABASE` | `cosmos-training-murokawa` |
+| `AZURE_OPENAI_ENDPOINT` | `https://foundry-training-murokawa.services.ai.azure.com/api/projects/proj-default` |
+| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4o` |
+| `FOUNDRY_AGENT_URL_SUMMARY` | summary-agent URL |
+| `FOUNDRY_AGENT_URL_QUIZ` | quiz-agent URL |
+| `AAD_CLIENT_ID` | Entra アプリの Client ID (Step 2) |

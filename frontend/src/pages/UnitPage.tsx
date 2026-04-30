@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import { api, Unit, Quiz } from "../api/client";
+import { useAuth } from "../auth";
 
 const USER_ID = "demo-user"; // Static Web Apps の認証ヘッダーから取得するよう後で差し替え
 
@@ -90,6 +91,7 @@ function ProgressIndicator(props: { startedAt: number; steps: { untilSec: number
 export default function UnitPage() {
   const { unitId = "" } = useParams<{ unitId: string }>();
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
   const [unit, setUnit] = useState<Unit | null>(null);
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -120,6 +122,20 @@ export default function UnitPage() {
     })();
     setSummaryStartedAt(Date.now());
   }, [unitId]);
+
+  async function handleRegenerateSummary() {
+    setErrorMsg(null);
+    setUnit((u) => (u ? { ...u, summary_ja: "" } : u));
+    setSummaryStartedAt(Date.now());
+    try {
+      const u = await api.getContent(unitId, true);
+      setUnit(u);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSummaryStartedAt(null);
+    }
+  }
 
   async function handleLoadQuiz() {
     setErrorMsg(null);
@@ -198,7 +214,27 @@ export default function UnitPage() {
 
       {unit.summary_ja ? (
         <section>
-          <h3>要約</h3>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.25rem" }}>
+            <h3 style={{ margin: 0 }}>要約</h3>
+            {isAdmin && (
+              <button
+                onClick={handleRegenerateSummary}
+                disabled={summaryStartedAt !== null}
+                style={{
+                  background: "none",
+                  border: "1px solid #0078d4",
+                  color: "#0078d4",
+                  padding: "0.2rem 0.6rem",
+                  borderRadius: 4,
+                  fontSize: "0.8rem",
+                  cursor: summaryStartedAt !== null ? "not-allowed" : "pointer",
+                }}
+                title="summary-agent で要約を再生成します"
+              >
+                ↻ 再要約
+              </button>
+            )}
+          </div>
           <div style={{ background: "#f8f9fa", padding: "1rem 1.25rem", borderRadius: 4, lineHeight: 1.7 }}>
             <ReactMarkdown components={MARKDOWN_COMPONENTS}>{unit.summary_ja}</ReactMarkdown>
           </div>

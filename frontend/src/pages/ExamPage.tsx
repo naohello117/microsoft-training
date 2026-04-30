@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, LearningPath } from "../api/client";
+import { useAuth } from "../auth";
 
 const EXAM_NAMES: Record<string, string> = {
   "az-500": "AZ-500",
@@ -21,6 +22,7 @@ const s = {
 export default function ExamPage() {
   const { examId = "" } = useParams<{ examId: string }>();
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
@@ -64,29 +66,39 @@ export default function ExamPage() {
       <button style={s.back} onClick={() => navigate("/")}>← 試験一覧に戻る</button>
 
       <h2 style={{ marginBottom: "0.25rem" }}>{examName}</h2>
-      <p style={{ color: "#666", marginTop: 0, marginBottom: "1.25rem" }}>ラーニングパスを追加または選択してください</p>
-
-      <form onSubmit={handleScrape} style={s.form}>
-        <input
-          style={s.input}
-          type="url"
-          value={url}
-          onChange={e => setUrl(e.target.value)}
-          placeholder="認定試験 / コース / ラーニングパス URL（/credentials/certifications/exams/... など）"
-          required
-        />
-        <button type="submit" style={s.btn()} disabled={loading}>
-          {loading ? "取得中..." : "追加"}
-        </button>
-      </form>
-      <p style={{ fontSize: "0.8rem", color: "#888", margin: "-0.5rem 0 1rem" }}>
-        例：<code>https://learn.microsoft.com/ja-jp/credentials/certifications/exams/sc-100/</code> もしくは <code>/training/courses/az-500t00</code> / <code>/training/paths/...</code>（認定試験・コース URL は配下のラーニングパスを一括取得）
+      <p style={{ color: "#666", marginTop: 0, marginBottom: "1.25rem" }}>
+        {isAdmin ? "ラーニングパスを追加または選択してください" : "ラーニングパスを選択してください"}
       </p>
+
+      {isAdmin && (
+        <>
+          <form onSubmit={handleScrape} style={s.form}>
+            <input
+              style={s.input}
+              type="url"
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+              placeholder="認定試験 / コース / ラーニングパス URL（/credentials/certifications/exams/... など）"
+              required
+            />
+            <button type="submit" style={s.btn()} disabled={loading}>
+              {loading ? "取得中..." : "追加"}
+            </button>
+          </form>
+          <p style={{ fontSize: "0.8rem", color: "#888", margin: "-0.5rem 0 1rem" }}>
+            例：<code>https://learn.microsoft.com/ja-jp/credentials/certifications/exams/sc-100/</code> もしくは <code>/training/courses/az-500t00</code> / <code>/training/paths/...</code>（認定試験・コース URL は配下のラーニングパスを一括取得）
+          </p>
+        </>
+      )}
 
       {msg && <p style={s.status(msg.ok)}>{msg.text}</p>}
 
       {paths.length === 0 && !loading ? (
-        <p style={{ color: "#888" }}>まだラーニングパスがありません。URLを入力して追加してください。</p>
+        <p style={{ color: "#888" }}>
+          {isAdmin
+            ? "まだラーニングパスがありません。URLを入力して追加してください。"
+            : "まだラーニングパスがありません。"}
+        </p>
       ) : (
         paths.map(path => (
           <div

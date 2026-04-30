@@ -1,24 +1,35 @@
 {
   "routes": [
     {
-      "route": "/api/*",
-      "allowedRoles": ["authenticated"]
+      "route": "/api/scrape",
+      "methods": ["POST"],
+      "allowedRoles": ["admin"]
     },
     {
-      "route": "/*",
-      "serve": "/index.html",
-      "statusCode": 200
+      "route": "/api/learning-paths/*",
+      "methods": ["PATCH"],
+      "allowedRoles": ["admin"]
+    },
+    {
+      "route": "/api/*",
+      "allowedRoles": ["anonymous", "authenticated"]
     }
   ],
   "navigationFallback": {
     "rewrite": "/index.html",
     "exclude": ["/images/*.{png,jpg}", "/css/*"]
   },
+  "responseOverrides": {
+    "401": {
+      "redirect": "/.auth/login/aad?post_login_redirect_uri=/",
+      "statusCode": 302
+    }
+  },
   "auth": {
     "identityProviders": {
       "azureActiveDirectory": {
         "registration": {
-          "openIdIssuer": "https://login.microsoftonline.com/<tenant-id>/v2.0",
+          "openIdIssuer": "https://login.microsoftonline.com/14cc29a0-8bbf-4f11-aa41-b629ec7ea3f8/v2.0",
           "clientIdSettingName": "AAD_CLIENT_ID",
           "clientSecretSettingName": "AAD_CLIENT_SECRET"
         }
@@ -28,6 +39,6 @@
   "globalHeaders": {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
-    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' /.auth/"
   }
 }

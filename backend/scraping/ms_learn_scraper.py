@@ -27,17 +27,21 @@ _CONTENT_SELECTORS = [
 ]
 
 
-async def scrape_from_url(source_url: str, include_content: bool = False) -> list[dict[str, Any]]:
+async def scrape_from_url(source_url: str, include_content: bool = False) -> dict[str, Any]:
     """入力URLを判別し、含まれる全ラーニングパスをスクレイピングする。
 
     対応URL:
     - /credentials/certifications/exams/<exam-id>/ : 認定試験ページ配下のコース・パスを再帰的に抽出
-    - /training/courses/<id>  : コース配下の全ラーニングパスを抽出してスクレイピング
-    - /training/paths/<slug>/ : 単体のラーニングパス
+    - /credentials/certifications/<cert-slug>/     : 認定資格ページ → 関連する試験IDを抽出し対応する試験ページを走査
+    - /training/courses/<id>                        : コース配下の全ラーニングパスを抽出してスクレイピング
+    - /training/paths/<slug>/                       : 単体のラーニングパス
 
     include_content=False (デフォルト): 目次のみ取得（数十秒で完了）。
         ユニット本文は初回アクセス時に scrape_single_unit() で遅延取得する。
     include_content=True: 全ユニットの本文も一括取得（10分タイムアウトに注意）。
+
+    Returns:
+        {"paths": [...], "exam_id": str|None, "exam_name": str|None}
     """
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
@@ -47,7 +51,15 @@ async def scrape_from_url(source_url: str, include_content: bool = False) -> lis
         )
         page = await context.new_page()
         try:
+            derived_exam_id: str | None = None
+            derived_exam_name: str | None = None
+            path_urls: list[str] = []
+
             if "/credentials/certifications/exams/" in source_url:
+                m = re.search(r"/credentials/certifications/exams/([a-z0-9-]+)", source_url, re.IGNORECASE)
+                if m:
+                    derived_exam_id = m.group(1).lower()
+                    derived_exam_name = derived_exam_id.upper()
                 course_urls, direct_path_urls = await _extract_links_from_certification(page, source_url)
                 logger.info(
                     "認定試験ページからコース %d 件 / パス %d 件を直接検出",
@@ -58,30 +70,59 @@ async def scrape_from_url(source_url: str, include_content: bool = False) -> lis
                     sub_paths = await _extract_path_urls_from_course(page, c_url)
                     logger.info("  コース %s から %d 件のパスを抽出", c_url, len(sub_paths))
                     path_urls.extend(sub_paths)
-                # 順序保持の重複排除
-                seen_paths: set[str] = set()
-                deduped: list[str] = []
-                for u in path_urls:
-                    if u not in seen_paths:
-                        seen_paths.add(u)
-                        deduped.append(u)
-                path_urls = deduped
-                logger.info("認定試験ページから合計 %d 件のラーニングパスを取得", len(path_urls))
-                if not path_urls:
-                    raise RuntimeError("認定試験ページからラーニングパスが見つかりませんでした")
+
+            elif "/credentials/certifications/" in source_url:
+                # 認定資格ページ → 紐づく試験ID一覧を抽出 → 各試験ページ配下を走査
+                exam_ids = await _extract_exam_ids_from_certification_page(page, source_url)
+                logger.info("認定資格ページから試験ID %d 件を検出: %s", len(exam_ids), exam_ids)
+                if not exam_ids:
+                    raise RuntimeError("認定資格ページから試験IDを抽出できませんでした")
+                derived_exam_id = exam_ids[0]
+                derived_exam_name = derived_exam_id.upper()
+                for eid in exam_ids:
+                    exam_url = f"https://learn.microsoft.com/ja-jp/credentials/certifications/exams/{eid}/"
+                    course_urls, direct_path_urls = await _extract_links_from_certification(page, exam_url)
+                    logger.info(
+                        "  試験 %s からコース %d 件 / パス %d 件を検出",
+                        eid, len(course_urls), len(direct_path_urls),
+                    )
+                    path_urls.extend(direct_path_urls)
+                    for c_url in course_urls:
+                        sub_paths = await _extract_path_urls_from_course(page, c_url)
+                        path_urls.extend(sub_paths)
+
             elif "/training/courses/" in source_url:
+                m = re.search(r"/training/courses/([a-z0-9-]+)", source_url, re.IGNORECASE)
+                if m:
+                    course_id = m.group(1).lower()
+                    exam_m = re.match(r"^([a-z]+-\d+)t\d+$", course_id)
+                    if exam_m:
+                        derived_exam_id = exam_m.group(1)
+                        derived_exam_name = derived_exam_id.upper()
                 path_urls = await _extract_path_urls_from_course(page, source_url)
                 logger.info("コースから %d 件のラーニングパスを検出", len(path_urls))
-                if not path_urls:
-                    raise RuntimeError("コースページ内にラーニングパスが見つかりませんでした")
+
             elif "/training/paths/" in source_url:
                 path_urls = [source_url]
+
             else:
                 raise ValueError(
                     "サポートされていないURL形式です。"
-                    "/training/courses/... / /training/paths/... / "
-                    "/credentials/certifications/exams/... のいずれかを指定してください"
+                    "/credentials/certifications/... / /training/courses/... / "
+                    "/training/paths/... のいずれかを指定してください"
                 )
+
+            # 順序保持の重複排除
+            seen_paths: set[str] = set()
+            deduped: list[str] = []
+            for u in path_urls:
+                if u not in seen_paths:
+                    seen_paths.add(u)
+                    deduped.append(u)
+            path_urls = deduped
+            logger.info("合計 %d 件のラーニングパスを取得", len(path_urls))
+            if not path_urls:
+                raise RuntimeError("ラーニングパスを1件も抽出できませんでした")
 
             results: list[dict[str, Any]] = []
             for idx, p_url in enumerate(path_urls, 1):
@@ -94,7 +135,11 @@ async def scrape_from_url(source_url: str, include_content: bool = False) -> lis
                             await page.wait_for_timeout(800)
                             logger.info("  ユニット完了: %s", unit["title"])
                 results.append(path_data)
-            return results
+            return {
+                "paths": results,
+                "exam_id": derived_exam_id,
+                "exam_name": derived_exam_name,
+            }
         finally:
             await browser.close()
 
@@ -168,10 +213,44 @@ async def _extract_path_urls_from_course(page: Page, course_url: str) -> list[st
     return hrefs
 
 
+async def _extract_exam_ids_from_certification_page(page: Page, cert_url: str) -> list[str]:
+    """認定資格ページ（/credentials/certifications/<cert-slug>/）から紐づく試験IDを抽出する。
+
+    抽出ソース（優先順）:
+    1. `/credentials/certifications/exams/<id>/` 形式のリンク
+    2. ページHTML内の `exam.XX-NNN` パターン（Pearson Vue スケジューリングURL等）
+    """
+    await page.goto(cert_url, wait_until="domcontentloaded", timeout=30000)
+    await page.wait_for_timeout(2000)
+
+    ids: list[str] = await page.evaluate(r"""() => {
+        const found = new Set();
+        // リンクから /credentials/certifications/exams/<id>/
+        document.querySelectorAll('a[href]').forEach(a => {
+            try {
+                const u = new URL(a.href);
+                const m = u.pathname.match(/\/credentials\/certifications\/exams\/([a-z0-9-]+)/i);
+                if (m) found.add(m[1].toLowerCase());
+            } catch {}
+        });
+        // ページHTML全体から exam.XX-NNN パターン（ハイフン区切りの短いコード）
+        const html = document.documentElement.outerHTML;
+        const re = /exam\.([a-z]+-\d+)/gi;
+        let m;
+        while ((m = re.exec(html)) !== null) {
+            found.add(m[1].toLowerCase());
+        }
+        return [...found];
+    }""")
+    # 安定した順序にするためアルファベット順で返す
+    return sorted(ids)
+
+
 # 後方互換エイリアス
 async def scrape_learning_path(path_url: str) -> dict[str, Any]:
-    results = await scrape_from_url(path_url)
-    return results[0] if results else {}
+    result = await scrape_from_url(path_url)
+    paths = result.get("paths", [])
+    return paths[0] if paths else {}
 
 
 async def _scrape_path_structure(page: Page, url: str) -> dict[str, Any]:

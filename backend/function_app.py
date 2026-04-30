@@ -1,10 +1,17 @@
 import json
 import logging
 import datetime
+import os
 import uuid
 import azure.functions as func
 from shared.cosmos_client import get_container
 from shared.foundry_agent import get_agent_url, invoke_agent
+from shared.auth import require_admin
+
+
+def _scrape_disabled() -> bool:
+    """本番環境では Playwright が動かないため、サーバー側スクレイピングを無効化する。"""
+    return os.environ.get("DISABLE_SCRAPE", "").lower() in ("1", "true", "yes")
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 logger = logging.getLogger(__name__)
@@ -56,6 +63,8 @@ async def list_learning_paths(req: func.HttpRequest) -> func.HttpResponse:
 # ------------------------------------------------------------------ #
 @app.route(route="learning-paths/{path_id}", methods=["PATCH"])
 async def update_learning_path(req: func.HttpRequest) -> func.HttpResponse:
+    if resp := require_admin(req):
+        return resp
     path_id: str = req.route_params.get("path_id", "")
     try:
         body = req.get_json()
@@ -101,6 +110,17 @@ async def list_units(req: func.HttpRequest) -> func.HttpResponse:
 # ------------------------------------------------------------------ #
 @app.route(route="scrape", methods=["POST"])
 async def scrape_url(req: func.HttpRequest) -> func.HttpResponse:
+    if _scrape_disabled():
+        return func.HttpResponse(
+            json.dumps({
+                "error": "scrape_disabled",
+                "message": "本番環境ではスクレイピング機能は無効化されています。管理者がローカル環境から実行してください。",
+            }, ensure_ascii=False),
+            mimetype="application/json",
+            status_code=503,
+        )
+    if resp := require_admin(req):
+        return resp
     try:
         body = req.get_json()
     except ValueError:
@@ -110,28 +130,35 @@ async def scrape_url(req: func.HttpRequest) -> func.HttpResponse:
     if not url or "learn.microsoft.com" not in url:
         return func.HttpResponse("有効なMicrosoft Learn URLを指定してください", status_code=400)
 
-    exam_id: str = body.get("exam_id", "").strip()
-    exam_name: str = body.get("exam_name", "").strip()
+    # フロントから明示的に指定された場合はそれで上書き、なければスクレイパー側の自動判別を採用
+    override_exam_id: str = body.get("exam_id", "").strip()
+    override_exam_name: str = body.get("exam_name", "").strip()
 
     try:
         from scraping.ms_learn_scraper import scrape_from_url
-        paths_data = await scrape_from_url(url)
+        result = await scrape_from_url(url)
     except Exception as exc:
         logger.exception("スクレイピング失敗: %s", url)
         return func.HttpResponse(f"スクレイピングに失敗しました: {exc}", status_code=500)
 
+    paths_data = result.get("paths", [])
+    derived_exam_id = result.get("exam_id")
+    derived_exam_name = result.get("exam_name")
     if not paths_data:
         return func.HttpResponse("スクレイピング結果が空です", status_code=500)
+
+    effective_exam_id = override_exam_id or derived_exam_id
+    effective_exam_name = override_exam_name or derived_exam_name
 
     container = get_container("learning_paths")
     units_container = get_container("units")
     saved_paths = []
 
     for path_data in paths_data:
-        if exam_id:
-            path_data["exam_id"] = exam_id
-        if exam_name:
-            path_data["exam_name"] = exam_name
+        if effective_exam_id:
+            path_data["exam_id"] = effective_exam_id
+        if effective_exam_name:
+            path_data["exam_name"] = effective_exam_name
 
         for module in path_data.get("modules", []):
             for unit in module.get("units", []):
@@ -145,7 +172,12 @@ async def scrape_url(req: func.HttpRequest) -> func.HttpResponse:
         })
 
     return func.HttpResponse(
-        json.dumps({"status": "ok", "paths": saved_paths}, ensure_ascii=False),
+        json.dumps({
+            "status": "ok",
+            "paths": saved_paths,
+            "exam_id": effective_exam_id,
+            "exam_name": effective_exam_name,
+        }, ensure_ascii=False),
         mimetype="application/json",
         status_code=202,
     )
@@ -160,6 +192,8 @@ async def get_content(req: func.HttpRequest) -> func.HttpResponse:
     if not unit_id:
         return func.HttpResponse("unit_idが必要です", status_code=400)
 
+    force = req.params.get("force", "").lower() in ("1", "true", "yes")
+
     container = get_container("units")
     items = list(container.query_items(
         query="SELECT * FROM c WHERE c.id = @id",
@@ -170,12 +204,26 @@ async def get_content(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("ユニットが見つかりません", status_code=404)
     unit = items[0]
 
-    if unit.get("summary_ja"):
+    if unit.get("summary_ja") and not force:
         return func.HttpResponse(json.dumps(unit, ensure_ascii=False), mimetype="application/json")
+
+    # 再要約 (force=true) のみ管理者限定。初回生成は一般ユーザーにも許可する
+    # （管理者がすべてのラーニングパスを事前生成する負担を避けるため）
+    if force and (resp := require_admin(req)):
+        return resp
 
     raw = unit.get("raw_content", "")
     # 遅延スクレイピング：目次のみ取得時は raw_content が空なのでここで本文取得
     if not raw:
+        if _scrape_disabled():
+            return func.HttpResponse(
+                json.dumps({
+                    "error": "content_not_cached",
+                    "message": "このユニットの本文がまだ取得されていません。管理者がローカル環境で事前取得する必要があります。",
+                }, ensure_ascii=False),
+                mimetype="application/json",
+                status_code=503,
+            )
         unit_url = unit.get("url", "")
         if not unit_url:
             return func.HttpResponse("ユニットURLが不明です", status_code=500)
@@ -224,6 +272,9 @@ async def generate_quiz(req: func.HttpRequest) -> func.HttpResponse:
     ))
     if existing:
         return func.HttpResponse(json.dumps(existing, ensure_ascii=False), mimetype="application/json")
+
+    # 初回クイズ生成は一般ユーザーにも許可する
+    # （再生成のエンドポイントは未提供。今後追加する場合は force パラメータで管理者限定にする）
 
     units = list(get_container("units").query_items(
         query="SELECT * FROM c WHERE c.id = @id",

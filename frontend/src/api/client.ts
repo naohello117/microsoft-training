@@ -71,7 +71,12 @@ export const api = {
     apiFetch<LearningPath[]>(examId ? `/learning-paths?exam_id=${examId}` : "/learning-paths"),
 
   scrapeUrl: (url: string, examId?: string, examName?: string) =>
-    apiFetch<{ status: string; paths: { learning_path_id: string; title: string }[] }>("/scrape", {
+    apiFetch<{
+      status: string;
+      paths: { learning_path_id: string; title: string }[];
+      exam_id?: string | null;
+      exam_name?: string | null;
+    }>("/scrape", {
       method: "POST",
       body: JSON.stringify({ url, exam_id: examId, exam_name: examName }),
     }),
@@ -88,8 +93,8 @@ export const api = {
   getModuleUnits: (moduleId: string) =>
     apiFetch<Unit[]>(`/units/${moduleId}`),
 
-  getContent: (unitId: string) =>
-    apiFetch<Unit>(`/content/${unitId}`),
+  getContent: (unitId: string, force = false) =>
+    apiFetch<Unit>(`/content/${unitId}${force ? "?force=true" : ""}`),
 
   generateQuiz: (unitId: string) =>
     apiFetch<Quiz[]>(`/quiz/${unitId}`, { method: "POST" }),

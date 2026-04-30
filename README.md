@@ -16,6 +16,7 @@ Microsoft Learn の資格試験ラーニングパス（AZ-500 / SC-300 / SC-100 
 8. [データモデル（Cosmos DB）](#データモデルcosmos-db)
 9. [技術的な決定事項・注意点](#技術的な決定事項注意点)
 10. [プロジェクト構成](#プロジェクト構成)
+11. [本番デプロイ・CI/CD](#本番デプロイcicd)
 
 ---
 
@@ -490,6 +491,24 @@ microsoft-training/
 ```
 
 ---
+
+## 本番デプロイ・CI/CD
+
+詳細は [`docs/deployment.md`](docs/deployment.md) を参照。
+
+**要点**:
+- **Static Web Apps (Standard)** が React SPA を配信し、Entra ID 認証 (`admin` ロール判定) を担う
+- **Azure Functions (Linux Consumption)** を SWA `linkedBackend` で `/api/*` として連携
+- **Cosmos DB は Managed Identity 認証** (`disableLocalAuth: true`)
+- **本番ではスクレイピングを `DISABLE_SCRAPE=true` で無効化** — 管理者がローカル環境で実行し、本番 Cosmos に直接書き込む運用
+- **GitHub Actions 3 本** で `infra/` `backend/` `frontend/` をパス別にデプロイ
+- 認証は **OIDC (Workload Identity Federation)** — 長期シークレット不要
+
+| ワークフロー | 起動条件 |
+|---|---|
+| `infra.yml` | `infra/**.bicep` 変更時 |
+| `backend.yml` | `backend/**` 変更時 |
+| `frontend.yml` | `frontend/**` 変更時 (PR は自動でプレビュー環境作成) |
 
 ## ライセンス
 
