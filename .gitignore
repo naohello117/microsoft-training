@@ -1,2 +1,30 @@
 # ローカル専用メモ (シークレットを含む可能性があるため除外)
 *.local.md
+
+# ============== Node / Frontend ==============
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+.env.local
+.env.*.local
+
+# ============== Python / Backend ==============
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.python_packages/
+.venv/
+venv/
+env/
+
+# ============== Editor / OS ==============
+.DS_Store
+Thumbs.db
+*.swp
+
+# ============== Azure / Functions ==============
+local.settings.json
+bin/
+obj/
