@@ -13,7 +13,7 @@ def _scrape_disabled() -> bool:
     """本番環境では Playwright が動かないため、サーバー側スクレイピングを無効化する。"""
     return os.environ.get("DISABLE_SCRAPE", "").lower() in ("1", "true", "yes")
 
-app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
+app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 logger = logging.getLogger(__name__)
 
 
