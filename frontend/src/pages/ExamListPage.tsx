@@ -150,17 +150,12 @@ export default function ExamListPage() {
     }
   }
 
-  // 既知の試験を先頭に、後はAPIから返ってきた順 / ID昇順で表示
-  const knownExams = ["az-500", "sc-300", "sc-100"];
-  const examMap: Record<string, Exam> = {};
-  for (const e of exams) examMap[e.exam_id] = e;
-  for (const id of knownExams) {
-    if (!examMap[id])
-      examMap[id] = { exam_id: id, exam_name: id.toUpperCase(), path_count: 0 };
-  }
-  const displayExams = Object.values(examMap).sort((a, b) => {
-    const ai = knownExams.indexOf(a.exam_id);
-    const bi = knownExams.indexOf(b.exam_id);
+  // API から返ってきた（= 実際にコンテンツが投入されている）試験のみ表示
+  // 既知 ID を優先してソートし、未知 ID は exam_id 昇順
+  const knownOrder = ["az-500", "sc-300", "sc-100"];
+  const displayExams = [...exams].sort((a, b) => {
+    const ai = knownOrder.indexOf(a.exam_id);
+    const bi = knownOrder.indexOf(b.exam_id);
     if (ai !== -1 && bi !== -1) return ai - bi;
     if (ai !== -1) return -1;
     if (bi !== -1) return 1;
@@ -214,6 +209,22 @@ export default function ExamListPage() {
       )}
 
       {msg && <p style={s.status(msg.ok)}>{msg.text}</p>}
+
+      {displayExams.length === 0 && !loading && (
+        <div style={{ marginTop: "2rem", padding: "1.5rem", border: "1px dashed #ccc", borderRadius: 6, color: "#555", textAlign: "center" }}>
+          {isAdmin ? (
+            <>
+              <p style={{ margin: "0 0 0.5rem", fontWeight: "bold" }}>まだ試験コンテンツが登録されていません</p>
+              <p style={{ margin: 0, fontSize: "0.9rem" }}>
+                本番環境ではサーバー側スクレイピングは無効です。<br />
+                管理者は <code>docs/HowToUse.md</code> の手順に従い、ローカル環境から本番 Cosmos へコンテンツを投入してください。
+              </p>
+            </>
+          ) : (
+            <p style={{ margin: 0 }}>まだ学習コンテンツが公開されていません。管理者による投入をお待ちください。</p>
+          )}
+        </div>
+      )}
 
       <div style={s.grid}>
         {displayExams.map((exam) => {
