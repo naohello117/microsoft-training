@@ -217,7 +217,7 @@ export default function ExamListPage() {
               <p style={{ margin: "0 0 0.5rem", fontWeight: "bold" }}>まだ試験コンテンツが登録されていません</p>
               <p style={{ margin: 0, fontSize: "0.9rem" }}>
                 本番環境ではサーバー側スクレイピングは無効です。<br />
-                管理者は <code>docs/HowToUse.md</code> の手順に従い、ローカル環境から本番 Cosmos へコンテンツを投入してください。
+                管理者は <code>HowToUse.md</code> の手順に従い、ローカル環境から本番 Cosmos へコンテンツを投入してください。
               </p>
             </>
           ) : (

@@ -56,7 +56,19 @@ az cosmosdb sql role assignment create \
   --role-definition-id 00000000-0000-0000-0000-000000000002
 ```
 
-#### 1-4. ローカル設定の確認
+#### 1-4. フロントエンドの管理者バイパス設定
+
+`frontend/.env.local` を作成（または編集）し、以下を設定:
+
+```
+VITE_LOCAL_ADMIN_BYPASS=true
+```
+
+> Vite 開発サーバーには SWA 認証 (`/.auth/me`) が存在しないため、これを `true` にしないとローカル UI で管理者操作（URL 入力フォーム）が表示されません。
+> 設定変更後は **`npm run dev` を再起動** すること（Vite は起動時に環境変数を読むため）。
+> このファイルは `.gitignore` 済みでコミットされません。本番側には影響しません。
+
+#### 1-5. バックエンドのローカル設定確認
 
 `backend/local.settings.json` が以下の値になっているか確認（本番 Cosmos に向ける）:
 
@@ -129,6 +141,7 @@ npm run dev
 |---|---|
 | `func start` で「Python ランタイムが見つからない」 | Azure Functions Core Tools v4 をインストール (`npm i -g azure-functions-core-tools@4`) |
 | `playwright._impl._api_types.Error: ...` | `playwright install chromium` を再実行 |
+| ローカル UI で URL 入力フォームが表示されない | `frontend/.env.local` の `VITE_LOCAL_ADMIN_BYPASS=true` を確認後、`npm run dev` を再起動 |
 | ローカル UI でフォーム送信時に 401/403 | `local.settings.json` に `"LOCAL_ADMIN_BYPASS": "true"` があるか確認 |
 | Cosmos 書き込みで 403 / `Forbidden` | 1-3 のロール割り当てが完了していない。`az cosmosdb sql role assignment list --account-name cosmos-training-murokawa --resource-group rg-microsoft-training` で確認 |
 | 本番 SWA で要約が出ない | Application Insights で例外確認: <br>`az monitor app-insights query --app bd87bf45-3b52-4d29-b025-27b2b389fe5e --analytics-query "exceptions \| order by timestamp desc \| take 10"` |
