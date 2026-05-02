@@ -11,7 +11,19 @@ import uuid
 import datetime
 import logging
 from typing import Any
-from playwright.async_api import async_playwright, Page
+from urllib.parse import urljoin
+
+import aiohttp
+from bs4 import BeautifulSoup
+
+# Playwright は本番 (Linux Consumption) では動かないため遅延 import
+# import 失敗時にもアプリ全体が落ちないようにオプショナル扱いにする
+try:
+    from playwright.async_api import async_playwright, Page  # type: ignore
+    _PLAYWRIGHT_AVAILABLE = True
+except Exception:  # ImportError or runtime
+    _PLAYWRIGHT_AVAILABLE = False
+    Page = Any  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -144,8 +156,76 @@ async def scrape_from_url(source_url: str, include_content: bool = False) -> dic
             await browser.close()
 
 
+async def scrape_single_unit_http(unit_url: str) -> str:
+    """単一ユニット本文を HTTP + BeautifulSoup で取得（Playwright 非依存／本番 Linux Consumption 対応）。
+
+    Microsoft Learn のユニットページは本文が初期 HTML にレンダリングされているため、
+    ブラウザ起動なしで取得できる。Playwright を使わない分、起動コストが小さく
+    Functions Consumption でも動作する。
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "ja",
+        "Accept": "text/html,application/xhtml+xml",
+    }
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+        async with session.get(unit_url, allow_redirects=True) as resp:
+            resp.raise_for_status()
+            html = await resp.text()
+    return _extract_unit_text_from_html(html, base_url=unit_url)
+
+
+def _extract_unit_text_from_html(html: str, base_url: str) -> str:
+    """HTML 文字列から不要要素を除き、リンクを Markdown 形式に書き換えてテキストを返す。
+
+    Playwright 版 (_scrape_unit_content) と同じセマンティクスを BeautifulSoup で再現。
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 不要要素を除去
+    for sel in _REMOVE_SELECTORS:
+        for el in soup.select(sel):
+            el.decompose()
+
+    # リンクを [text](absolute_url) Markdown 形式に書き換え
+    for a in soup.find_all("a", href=True):
+        raw_href = a.get("href", "").strip()
+        if not raw_href or raw_href.startswith("#"):
+            continue
+        # 相対 URL を絶対 URL に解決
+        href = urljoin(base_url, raw_href)
+        if not re.match(r"^https?://", href):
+            continue
+        text = a.get_text(strip=True)
+        if not text or text == href:
+            continue
+        a.replace_with(f"[{text}]({href})")
+
+    # コンテンツエリアからテキストを取得
+    for selector in _CONTENT_SELECTORS:
+        el = soup.select_one(selector)
+        if el is None:
+            continue
+        text = _clean_text(el.get_text(separator="\n", strip=False))
+        if len(text) > 100:
+            return text
+
+    # フォールバック: body 全体
+    body = soup.select_one("body")
+    text = _clean_text(body.get_text(separator="\n", strip=False)) if body else ""
+    return text
+
+
 async def scrape_single_unit(unit_url: str) -> str:
-    """単一ユニットの本文を取得（遅延スクレイピング用）。"""
+    """単一ユニットの本文を取得（遅延スクレイピング用・後方互換）。
+
+    本関数は Playwright 経由。Linux Consumption では動かないので、
+    本番ランタイムからは scrape_single_unit_http() を使うこと。
+    """
+    if not _PLAYWRIGHT_AVAILABLE:
+        # 本番環境などで Playwright が未インストールの場合は HTTP 版にフォールバック
+        return await scrape_single_unit_http(unit_url)
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         context = await browser.new_context(

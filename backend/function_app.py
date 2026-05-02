@@ -214,22 +214,14 @@ async def get_content(req: func.HttpRequest) -> func.HttpResponse:
 
     raw = unit.get("raw_content", "")
     # 遅延スクレイピング：目次のみ取得時は raw_content が空なのでここで本文取得
+    # ユニット本文は HTTP + BeautifulSoup で取得するため Playwright 不要 → 本番でも動作
     if not raw:
-        if _scrape_disabled():
-            return func.HttpResponse(
-                json.dumps({
-                    "error": "content_not_cached",
-                    "message": "このユニットの本文がまだ取得されていません。管理者がローカル環境で事前取得する必要があります。",
-                }, ensure_ascii=False),
-                mimetype="application/json",
-                status_code=503,
-            )
         unit_url = unit.get("url", "")
         if not unit_url:
             return func.HttpResponse("ユニットURLが不明です", status_code=500)
         try:
-            from scraping.ms_learn_scraper import scrape_single_unit
-            raw = await scrape_single_unit(unit_url)
+            from scraping.ms_learn_scraper import scrape_single_unit_http
+            raw = await scrape_single_unit_http(unit_url)
         except Exception as exc:
             logger.exception("本文スクレイピング失敗: %s", unit_url)
             return func.HttpResponse(f"本文取得に失敗しました: {exc}", status_code=500)
