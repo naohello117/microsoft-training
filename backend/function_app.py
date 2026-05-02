@@ -230,6 +230,51 @@ async def get_content(req: func.HttpRequest) -> func.HttpResponse:
         unit["raw_content"] = raw
         unit["scraped_at"] = datetime.datetime.utcnow().isoformat() + "Z"
         unit["is_scraped"] = True
+        # 要約 (Foundry call ~30〜45 秒) を 1 リクエスト内で行うと SWA linkedBackend の
+        # 45 秒タイムアウトに当たる。本文を即座に保存して返し、要約は別エンドポイント
+        # POST /api/summarize/{unit_id} で生成させる二段構成にする。
+        container.upsert_item(unit)
+
+    return func.HttpResponse(json.dumps(unit, ensure_ascii=False), mimetype="application/json")
+
+
+# ------------------------------------------------------------------ #
+# POST /api/summarize/{unit_id}  要約を生成（Foundry summary-agent 呼び出し）
+# ------------------------------------------------------------------ #
+@app.route(route="summarize/{unit_id}", methods=["POST"])
+async def summarize_unit(req: func.HttpRequest) -> func.HttpResponse:
+    unit_id: str = req.route_params.get("unit_id", "")
+    if not unit_id:
+        return func.HttpResponse("unit_idが必要です", status_code=400)
+
+    force = req.params.get("force", "").lower() in ("1", "true", "yes")
+    # 再要約 (force=true) のみ管理者限定。初回生成は一般ユーザーにも許可する。
+    if force and (resp := require_admin(req)):
+        return resp
+
+    container = get_container("units")
+    items = list(container.query_items(
+        query="SELECT * FROM c WHERE c.id = @id",
+        parameters=[{"name": "@id", "value": unit_id}],
+        enable_cross_partition_query=True,
+    ))
+    if not items:
+        return func.HttpResponse("ユニットが見つかりません", status_code=404)
+    unit = items[0]
+
+    if unit.get("summary_ja") and not force:
+        return func.HttpResponse(json.dumps(unit, ensure_ascii=False), mimetype="application/json")
+
+    raw = unit.get("raw_content", "")
+    if not raw:
+        return func.HttpResponse(
+            json.dumps({
+                "error": "raw_content_missing",
+                "message": "先に GET /api/content/{unit_id} で本文を取得してください",
+            }, ensure_ascii=False),
+            mimetype="application/json",
+            status_code=409,
+        )
 
     try:
         summary_text = await invoke_agent(

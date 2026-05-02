@@ -106,13 +106,19 @@ export default function UnitPage() {
   useEffect(() => {
     if (loadOnce.current) return;
     loadOnce.current = true;
+    setSummaryStartedAt(Date.now());
     (async () => {
       try {
         setUnitLoading(true);
+        // 段階1: 本文取得（必要なら遅延スクレイピング）。Foundry を呼ばないので速い
         const u = await api.getContent(unitId);
         setUnit(u);
-        // 要約が未生成ならサーバー側で生成中のため、その目安としてスピナーを残す
-        // getContent は summary_ja を含めて返すため、通常ここで完了している
+        setUnitLoading(false);
+        // 段階2: 要約が未生成ならここで Foundry 呼び出し（30〜45秒）
+        if (!u.summary_ja) {
+          const summarized = await api.summarizeUnit(unitId);
+          setUnit(summarized);
+        }
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : String(err));
       } finally {
@@ -120,7 +126,6 @@ export default function UnitPage() {
         setSummaryStartedAt(null);
       }
     })();
-    setSummaryStartedAt(Date.now());
   }, [unitId]);
 
   async function handleRegenerateSummary() {
@@ -128,7 +133,7 @@ export default function UnitPage() {
     setUnit((u) => (u ? { ...u, summary_ja: "" } : u));
     setSummaryStartedAt(Date.now());
     try {
-      const u = await api.getContent(unitId, true);
+      const u = await api.summarizeUnit(unitId, true);
       setUnit(u);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));

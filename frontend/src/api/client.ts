@@ -96,6 +96,11 @@ export const api = {
   getContent: (unitId: string, force = false) =>
     apiFetch<Unit>(`/content/${unitId}${force ? "?force=true" : ""}`),
 
+  summarizeUnit: (unitId: string, force = false) =>
+    apiFetch<Unit>(`/summarize/${unitId}${force ? "?force=true" : ""}`, {
+      method: "POST",
+    }),
+
   generateQuiz: (unitId: string) =>
     apiFetch<Quiz[]>(`/quiz/${unitId}`, { method: "POST" }),
 
