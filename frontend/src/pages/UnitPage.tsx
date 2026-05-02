@@ -190,7 +190,50 @@ export default function UnitPage() {
       </div>
     );
   }
-  if (!unit) return <p>ユニットが見つかりません</p>;
+  if (!unit) {
+    // 503 content_not_cached の場合はバックエンドが構造化エラーを返している
+    let friendly: string | null = null;
+    let isNotCached = false;
+    if (errorMsg) {
+      const m = errorMsg.match(/\{.*\}/);
+      if (m) {
+        try {
+          const parsed = JSON.parse(m[0]);
+          if (parsed?.error === "content_not_cached") {
+            isNotCached = true;
+            friendly = parsed.message;
+          } else if (parsed?.message) {
+            friendly = parsed.message;
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+    }
+    return (
+      <div style={{ maxWidth: 800, margin: "0 auto", padding: "2rem" }}>
+        <button
+          style={{ background: "none", border: "none", color: "#0078d4", cursor: "pointer", fontSize: "0.9rem", padding: 0, marginBottom: "1rem" }}
+          onClick={() => navigate(-1)}
+        >
+          ← 戻る
+        </button>
+        {isNotCached ? (
+          <div style={{ background: "#fff3cd", border: "1px solid #ffeeba", color: "#856404", padding: "1rem 1.25rem", borderRadius: 6 }}>
+            <strong>このユニットの本文はまだ取得されていません</strong>
+            <p style={{ margin: "0.5rem 0 0" }}>{friendly}</p>
+            <p style={{ margin: "0.5rem 0 0", fontSize: "0.85rem" }}>
+              管理者はローカル環境（<code>npm run dev</code> + <code>func start</code>）でこのユニットを開いてください。本文取得 → 要約生成 → 本番 Cosmos に保存されると、本番 SWA でも表示できるようになります。詳細は <code>HowToUse.md</code> を参照。
+            </p>
+          </div>
+        ) : (
+          <p style={{ color: "#c00" }}>
+            {friendly ?? errorMsg ?? "ユニットが見つかりません"}
+          </p>
+        )}
+      </div>
+    );
+  }
 
   const score = showResults
     ? quizzes.filter((q) => answers[q.id] === q.correct_key).length
