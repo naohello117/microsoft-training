@@ -103,6 +103,28 @@ export default function UnitPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const loadOnce = useRef(false);
 
+  // 要約生成 + SWA 45 秒タイムアウト対策のポーリング。
+  // POST /api/summarize は SWA で 45 秒で切断されることがあるが、
+  // Function App 側はそのまま走り続けて Cosmos に要約を保存する。
+  // よって失敗時は GET /api/content をポーリングして summary_ja の出現を待つ。
+  async function generateSummaryWithFallback(force = false): Promise<Unit> {
+    try {
+      return await api.summarizeUnit(unitId, force);
+    } catch (err) {
+      // POST がタイムアウト/エラー → 5秒間隔で最大 24 回 (約2分) ポーリング
+      for (let i = 0; i < 24; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          const u = await api.getContent(unitId);
+          if (u.summary_ja) return u;
+        } catch {
+          /* 一時エラーは無視して継続 */
+        }
+      }
+      throw err;
+    }
+  }
+
   useEffect(() => {
     if (loadOnce.current) return;
     loadOnce.current = true;
@@ -114,9 +136,9 @@ export default function UnitPage() {
         const u = await api.getContent(unitId);
         setUnit(u);
         setUnitLoading(false);
-        // 段階2: 要約が未生成ならここで Foundry 呼び出し（30〜45秒）
+        // 段階2: 要約が未生成なら Foundry 呼び出し（バックグラウンドポーリングで完結）
         if (!u.summary_ja) {
-          const summarized = await api.summarizeUnit(unitId);
+          const summarized = await generateSummaryWithFallback();
           setUnit(summarized);
         }
       } catch (err) {
@@ -133,7 +155,7 @@ export default function UnitPage() {
     setUnit((u) => (u ? { ...u, summary_ja: "" } : u));
     setSummaryStartedAt(Date.now());
     try {
-      const u = await api.summarizeUnit(unitId, true);
+      const u = await generateSummaryWithFallback(true);
       setUnit(u);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
