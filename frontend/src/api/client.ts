@@ -104,6 +104,10 @@ export const api = {
   generateQuiz: (unitId: string) =>
     apiFetch<Quiz[]>(`/quiz/${unitId}`, { method: "POST" }),
 
+  // ポーリング用: 既存のクイズを取得するだけ（生成しない）
+  listQuizzes: (unitId: string) =>
+    apiFetch<Quiz[]>(`/quiz/${unitId}`, { method: "GET" }),
+
   getProgress: (userId: string, learningPathId = "az-500") =>
     apiFetch<Progress>(`/progress/${userId}?learning_path_id=${learningPathId}`),
 

@@ -293,9 +293,12 @@ async def summarize_unit(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ------------------------------------------------------------------ #
-# POST /api/quiz/{unit_id}  クイズを生成（キャッシュあり再利用）
+# GET/POST /api/quiz/{unit_id}
+#   GET: キャッシュ済みクイズの取得のみ（生成しない）。フロントが
+#        POST タイムアウト後にポーリングするためのエンドポイント。
+#   POST: 未生成なら quiz-agent を呼んで生成、生成済みなら即返す。
 # ------------------------------------------------------------------ #
-@app.route(route="quiz/{unit_id}", methods=["POST"])
+@app.route(route="quiz/{unit_id}", methods=["GET", "POST"])
 async def generate_quiz(req: func.HttpRequest) -> func.HttpResponse:
     unit_id: str = req.route_params.get("unit_id", "")
     if not unit_id:
@@ -309,6 +312,10 @@ async def generate_quiz(req: func.HttpRequest) -> func.HttpResponse:
     ))
     if existing:
         return func.HttpResponse(json.dumps(existing, ensure_ascii=False), mimetype="application/json")
+
+    # GET の場合は生成せずに空配列を返す（ポーリング用）
+    if req.method == "GET":
+        return func.HttpResponse("[]", mimetype="application/json")
 
     # 初回クイズ生成は一般ユーザーにも許可する
     # （再生成のエンドポイントは未提供。今後追加する場合は force パラメータで管理者限定にする）

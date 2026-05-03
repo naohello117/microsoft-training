@@ -164,12 +164,31 @@ export default function UnitPage() {
     }
   }
 
+  // クイズ生成 + SWA 45 秒切断対策のポーリング (要約と同じパターン)
+  async function generateQuizWithFallback(): Promise<Quiz[]> {
+    try {
+      return await api.generateQuiz(unitId);
+    } catch (err) {
+      // POST がタイムアウト/エラー → 5秒間隔で最大 24 回 (約2分) ポーリング
+      for (let i = 0; i < 24; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          const qs = await api.listQuizzes(unitId);
+          if (qs.length > 0) return qs;
+        } catch {
+          /* 一時エラーは無視して継続 */
+        }
+      }
+      throw err;
+    }
+  }
+
   async function handleLoadQuiz() {
     setErrorMsg(null);
     setQuizLoading(true);
     setQuizStartedAt(Date.now());
     try {
-      const qs = await api.generateQuiz(unitId);
+      const qs = await generateQuizWithFallback();
       setQuizzes(qs);
       setAnswers({});
       setShowResults(false);
