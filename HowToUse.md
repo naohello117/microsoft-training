@@ -24,18 +24,20 @@
 
 #### 1-1. ローカル環境のセットアップ
 
-```bash
+```powershell
 # このリポジトリを clone 済みの前提
 cd backend
-python -m venv .venv
-source .venv/Scripts/activate    # Windows Git Bash の場合
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements-dev.txt
 playwright install chromium
 ```
 
+> Python 3.11 を使うこと。3.12 以降は Azure Functions Core Tools 未対応で `func start` が失敗する場合があります。
+
 #### 1-2. Azure CLI ログイン（本番テナント）
 
-```bash
+```powershell
 az login
 az account set --subscription b3dc3a21-7bc2-4846-9a83-251d149649b0
 ```
@@ -45,21 +47,32 @@ az account set --subscription b3dc3a21-7bc2-4846-9a83-251d149649b0
 本番 Cosmos は `disableLocalAuth: true` のため、Entra ID 認証で操作します。
 管理者アカウントに **Cosmos DB Built-in Data Contributor** ロールを付与:
 
-```bash
-MY_OID=$(az ad signed-in-user show --query id -o tsv)
+```powershell
+$MY_OID = az ad signed-in-user show --query id -o tsv
 
-az cosmosdb sql role assignment create \
-  --account-name cosmos-training-murokawa \
-  --resource-group rg-microsoft-training \
-  --scope "/" \
-  --principal-id "$MY_OID" \
+az cosmosdb sql role assignment create `
+  --account-name cosmos-training-murokawa `
+  --resource-group rg-microsoft-training `
+  --scope "/" `
+  --principal-id $MY_OID `
   --role-definition-id 00000000-0000-0000-0000-000000000002
 ```
 
+> 既に付与されているか確認するには:
+> ```powershell
+> az cosmosdb sql role assignment list `
+>   --account-name cosmos-training-murokawa `
+>   --resource-group rg-microsoft-training `
+>   --query "[?principalId=='$(az ad signed-in-user show --query id -o tsv)'].roleDefinitionId" -o tsv
+> ```
+> 末尾が `...000000002` の行が出れば付与済み（再実行不要）。
+
 #### 1-4. フロントエンドの管理者バイパス設定
 
-`frontend/.env.local` を作成（または編集）し、以下を設定:
+> ⚠️ これはコマンド実行ではなく **テキストファイルの中身** です。
+> エディタで `frontend/.env.local` を開き（無ければ新規作成）、以下の一行を保存してください。
 
+ファイル: `frontend/.env.local`
 ```
 VITE_LOCAL_ADMIN_BYPASS=true
 ```
@@ -95,8 +108,9 @@ VITE_LOCAL_ADMIN_BYPASS=true
 
 #### 2-1. ローカル backend を起動
 
-```bash
+```powershell
 cd backend
+.\.venv\Scripts\Activate.ps1
 func start --port 7071
 ```
 
@@ -104,7 +118,7 @@ func start --port 7071
 
 #### 2-2. 別ターミナルでフロントエンドを起動
 
-```bash
+```powershell
 cd frontend
 npm install   # 初回のみ
 npm run dev

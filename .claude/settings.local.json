@@ -49,7 +49,33 @@
       "Bash(az bicep *)",
       "Bash(npx -y @azure/static-web-apps-cli deploy ./dist --deployment-token a1f8bf88a915767678f9cd82f02b84fb7d7ce7d53ecc643476fb674931f6023a07-14c7f488-c4b6-42df-af33-4587e16c759e000281405c451000 --env production)",
       "Bash(az account *)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(az identity *)",
+      "Bash(gh secret *)",
+      "Bash(gh api *)",
+      "Bash(winget install *)",
+      "Bash([ -x \"$GH\" ])",
+      "Bash('/c/Program Files/GitHub CLI/gh.exe' --version)",
+      "Read(//c/Program Files/GitHub CLI//**)",
+      "Bash('/c/Program Files/GitHub CLI/gh.exe' auth status)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(grep -E '__pycache__|\\\\.pyc$')",
+      "Bash(grep -E '\\\\.env\\\\.local$|\\\\.env$')",
+      "Bash(git rm *)",
+      "Bash(xargs -r git rm --cached)",
+      "Bash(git ls-remote *)",
+      "Bash(az functionapp *)",
+      "Bash(az monitor *)",
+      "Bash(az cosmosdb *)",
+      "Bash(az staticwebapp *)",
+      "Bash(mkdir -p frontend/public)",
+      "Bash(mv frontend/staticwebapp.config.json frontend/public/staticwebapp.config.json)",
+      "Bash(grep -n '```bash\\\\|^az ' c:/Users/naohe/Desktop/NSwork/技術検証/microsoft-training/HowToUse.md)"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
     ]
   }
 }
