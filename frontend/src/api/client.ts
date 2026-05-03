@@ -38,6 +38,7 @@ export interface Module {
 export interface Unit {
   id: string;
   module_id: string;
+  learning_path_id?: string;
   title: string;
   url: string;
   order: number;

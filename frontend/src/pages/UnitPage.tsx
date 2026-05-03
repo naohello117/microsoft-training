@@ -101,7 +101,9 @@ export default function UnitPage() {
   const [quizLoading, setQuizLoading] = useState(false);
   const [quizStartedAt, setQuizStartedAt] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const loadOnce = useRef(false);
+  const [nextUnitId, setNextUnitId] = useState<string | null>(null);
+  const [nextUnitTitle, setNextUnitTitle] = useState<string | null>(null);
+  const lastFetchedId = useRef<string | null>(null);
 
   // 要約生成 + SWA 45 秒タイムアウト対策のポーリング。
   // POST /api/summarize は SWA で 45 秒で切断されることがあるが、
@@ -125,13 +127,26 @@ export default function UnitPage() {
     }
   }
 
+  // unitId が変わったら（次へクリックなどで URL 遷移したら）状態をリセットして再ロード
   useEffect(() => {
-    if (loadOnce.current) return;
-    loadOnce.current = true;
+    if (lastFetchedId.current === unitId) return;
+    lastFetchedId.current = unitId;
+
+    // 状態リセット
+    setUnit(null);
+    setQuizzes([]);
+    setAnswers({});
+    setShowResults(false);
+    setErrorMsg(null);
+    setNextUnitId(null);
+    setNextUnitTitle(null);
+    setUnitLoading(true);
     setSummaryStartedAt(Date.now());
+    // ページ遷移時はトップに戻る
+    window.scrollTo({ top: 0, behavior: "auto" });
+
     (async () => {
       try {
-        setUnitLoading(true);
         // 段階1: 本文取得（必要なら遅延スクレイピング）。Foundry を呼ばないので速い
         const u = await api.getContent(unitId);
         setUnit(u);
@@ -149,6 +164,50 @@ export default function UnitPage() {
       }
     })();
   }, [unitId]);
+
+  // unit がロードされたら次のユニットを解決（同モジュール内 → モジュール終端なら次モジュール先頭）
+  useEffect(() => {
+    if (!unit?.id || !unit.module_id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const siblings = await api.getModuleUnits(unit.module_id);
+        const sorted = [...siblings].sort((a, b) => a.order - b.order);
+        const idx = sorted.findIndex((u) => u.id === unit.id);
+        if (idx >= 0 && idx < sorted.length - 1) {
+          if (cancelled) return;
+          setNextUnitId(sorted[idx + 1].id);
+          setNextUnitTitle(sorted[idx + 1].title);
+          return;
+        }
+        // モジュール末尾なので次モジュールの先頭ユニットを探す
+        if (!unit.learning_path_id) return;
+        const paths = await api.listLearningPaths();
+        const path = paths.find((p) => p.id === unit.learning_path_id);
+        if (!path?.modules) return;
+        const sortedMods = [...path.modules].sort((a, b) => a.order - b.order);
+        const modIdx = sortedMods.findIndex((m) => m.id === unit.module_id);
+        if (modIdx < 0 || modIdx >= sortedMods.length - 1) return;
+        const nextMod = sortedMods[modIdx + 1];
+        const nextUnits = await api.getModuleUnits(nextMod.id);
+        const sortedNext = [...nextUnits].sort((a, b) => a.order - b.order);
+        if (cancelled) return;
+        if (sortedNext.length > 0) {
+          setNextUnitId(sortedNext[0].id);
+          setNextUnitTitle(sortedNext[0].title);
+        }
+      } catch {
+        /* 解決できなければ次へボタンは表示しない */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [unit?.id, unit?.module_id, unit?.learning_path_id]);
+
+  function goNext() {
+    if (nextUnitId) navigate(`/unit/${nextUnitId}`);
+  }
 
   async function handleRegenerateSummary() {
     setErrorMsg(null);
@@ -287,12 +346,23 @@ export default function UnitPage() {
 
   return (
     <div style={{ maxWidth: 800, margin: "0 auto", padding: "2rem" }}>
-      <button
-        style={{ background: "none", border: "none", color: "#0078d4", cursor: "pointer", fontSize: "0.9rem", padding: 0, marginBottom: "1rem" }}
-        onClick={() => navigate(-1)}
-      >
-        ← 戻る
-      </button>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+        <button
+          style={{ background: "none", border: "none", color: "#0078d4", cursor: "pointer", fontSize: "0.9rem", padding: 0 }}
+          onClick={() => navigate(-1)}
+        >
+          ← 戻る
+        </button>
+        {nextUnitId && (
+          <button
+            style={{ background: "none", border: "none", color: "#0078d4", cursor: "pointer", fontSize: "0.9rem", padding: 0 }}
+            onClick={goNext}
+            title={nextUnitTitle ?? undefined}
+          >
+            次のユニット →
+          </button>
+        )}
+      </div>
       <h2>{unit.title}</h2>
 
       {errorMsg && (
@@ -408,6 +478,49 @@ export default function UnitPage() {
           </>
         )}
       </section>
+
+      {/* 学習完了後のナビゲーション。次のユニットがあればそちらへ、無ければラーニングパス完了の表示 */}
+      <hr style={{ marginTop: "2.5rem" }} />
+      <nav style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "1.5rem", gap: "1rem" }}>
+        <button
+          onClick={() => navigate(-1)}
+          style={{
+            padding: "0.6rem 1.2rem",
+            background: "#f6f8fa",
+            border: "1px solid #d0d7de",
+            borderRadius: 6,
+            cursor: "pointer",
+            fontSize: "0.95rem",
+            color: "#24292f",
+          }}
+        >
+          ← 一覧へ戻る
+        </button>
+        {nextUnitId ? (
+          <button
+            onClick={goNext}
+            style={{
+              padding: "0.6rem 1.4rem",
+              background: "#0078d4",
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              cursor: "pointer",
+              fontSize: "0.95rem",
+              fontWeight: 500,
+              maxWidth: "60%",
+              textAlign: "right",
+            }}
+            title={nextUnitTitle ?? undefined}
+          >
+            次のユニット: {nextUnitTitle ? (nextUnitTitle.length > 24 ? nextUnitTitle.slice(0, 22) + "…" : nextUnitTitle) : ""} →
+          </button>
+        ) : (
+          <span style={{ color: "#666", fontSize: "0.9rem" }}>
+            🎉 ラーニングパスの最終ユニットです
+          </span>
+        )}
+      </nav>
     </div>
   );
 }
